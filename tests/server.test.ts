@@ -6,10 +6,12 @@ import { GhostFetch, MaxRetriesExceededError, GhostFetchRequestError } from '../
 
 let port: number;
 let requestCount: number;
+const endpointHits = new Map<string, number>();
 
 const server = http.createServer((req, res) => {
   requestCount++;
   const url = req.url ?? '/';
+  endpointHits.set(url, (endpointHits.get(url) ?? 0) + 1);
 
   if (url === '/ok') {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -47,9 +49,10 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // First 2 requests return 429, 3rd returns 200
+  // First 2 hits to /recover return 429, 3rd returns 200
   if (url === '/recover') {
-    if (requestCount <= 2) {
+    const hits = endpointHits.get('/recover') ?? 0;
+    if (hits <= 2) {
       res.writeHead(429);
       res.end('rate limit');
     } else {
@@ -98,6 +101,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requestCount = 0;
+  endpointHits.clear();
 });
 
 afterAll(async () => {
