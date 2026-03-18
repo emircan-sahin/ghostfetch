@@ -1,0 +1,47 @@
+{
+  "name": "ghostfetch",
+  "version": "0.1.0",
+  "description": "Resilient HTTP client with CycleTLS, proxy rotation, smart error classification, and per-site interceptors",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.esm.json && echo '{\"type\":\"module\"}' > dist/esm/package.json && tsc -p tsconfig.cjs.json",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "fetch",
+    "proxy",
+    "cycletls",
+    "cloudflare",
+    "bypass",
+    "rotation",
+    "resilient",
+    "scraping"
+  ],
+  "author": "Emircan Sahin",
+  "license": "MIT",
+  "dependencies": {
+    "cycletls": "^1.0.26",
+    "form-data": "^4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
