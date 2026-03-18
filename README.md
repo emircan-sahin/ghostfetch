@@ -87,6 +87,13 @@ const res = await client.get('https://eu-only-api.com/data', {
 
 By default, if all proxies are banned or unavailable, requests proceed without a proxy. Enable `forceProxy` to make the request wait until a proxy becomes available (ban expires or proxy list is refreshed). This is useful for cron jobs where requests without a proxy are pointless.
 
+**What happens when `forceProxy: true` and no proxy is available?**
+
+| Scenario | Behavior |
+|----------|----------|
+| Proxy list is empty (none configured) | Throws `NoProxyAvailableError` immediately — nothing to wait for |
+| Proxies exist but all banned | Waits until a ban expires or `onProxyRefresh` provides fresh proxies |
+
 You can set it as the instance default or override per-request:
 
 ```ts
