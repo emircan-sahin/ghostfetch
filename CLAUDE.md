@@ -8,7 +8,7 @@ who need to fetch data from sites that aggressively block automated requests.
 
 ```
 /src            → Library source (TypeScript)
-/examples       → Usage examples
+/tests          → Vitest tests
 ```
 
 Package-specific details are in `.claude/rules/sdk.md`.
