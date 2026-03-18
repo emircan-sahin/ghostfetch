@@ -37,7 +37,8 @@ const client = new GhostFetch({
   ],
   timeout: 30000,
   retry: { delays: [5000, 15000, 30000] }, // 3 retries: wait 5s, 15s, 30s
-  ban: { maxFailures: 3, duration: 60 * 60 * 1000 }, // or ban: false to disable
+  ban: { maxFailures: 3, duration: 60 * 60 * 1000 },
+  // ban: false — disable proxy banning entirely
 });
 
 // Wait for health check to complete
@@ -143,6 +144,19 @@ const protectedData = await client.get('https://protected-api.com/data', {
   forceProxy: true,
 });
 ```
+
+## Disable Proxy Banning
+
+If your proxy provider handles rotation internally (e.g. BrightData, Oxylabs residential) or you have a small proxy pool you don't want to lose, you can disable banning entirely:
+
+```ts
+const client = new GhostFetch({
+  proxies: [...],
+  ban: false, // no proxy will ever be banned
+});
+```
+
+With `ban: false`, failed proxies are never penalized — they stay in rotation regardless of errors. Retry still works, just without proxy exclusion logic.
 
 ## Proxy Refresh
 
