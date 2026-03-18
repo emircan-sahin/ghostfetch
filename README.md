@@ -74,8 +74,10 @@ client.addInterceptor({
 
 ## Country-Based Proxy Selection
 
+All proxies are automatically resolved via ipinfo.io on init. This gives you country-level control over which proxy handles which request — useful when certain APIs only accept traffic from specific regions.
+
 ```ts
-// Proxies are auto-resolved via ipinfo.io on init
+// Only use a German proxy for this request
 const res = await client.get('https://eu-only-api.com/data', {
   country: 'DE',
 });
@@ -83,30 +85,53 @@ const res = await client.get('https://eu-only-api.com/data', {
 
 ## Force Proxy Mode
 
-```ts
-// Instance default: proceed without proxy if none available
-const client = new GhostFetch({ proxies: [...] });
+By default, if all proxies are banned or unavailable, requests proceed without a proxy. Enable `forceProxy` to make the request wait until a proxy becomes available (ban expires or proxy list is refreshed). This is useful for cron jobs where requests without a proxy are pointless.
 
-// Per-request: wait until a proxy is available
-const res = await client.get('https://protected-api.com', {
+You can set it as the instance default or override per-request:
+
+```ts
+// Instance default: all requests wait for proxy
+const client = new GhostFetch({
+  proxies: [...],
+  forceProxy: true,
+});
+
+// Override per-request: this specific endpoint works without proxy
+const publicData = await client.get('https://public-api.com/data', {
+  forceProxy: false,
+});
+
+// Or the other way: instance default is false, but this request needs a proxy
+const protectedData = await client.get('https://protected-api.com/data', {
   forceProxy: true,
 });
 ```
 
 ## Proxy Refresh
 
+Provide an `onProxyRefresh` callback to periodically fetch a fresh proxy list from your provider. When triggered, all existing bans are cleared and the new proxies go through health check before entering the pool.
+
 ```ts
 const client = new GhostFetch({
   proxies: [...],
-  proxyRefreshInterval: 60 * 60 * 1000, // 1 hour
+  proxyRefreshInterval: 60 * 60 * 1000, // every 1 hour
   onProxyRefresh: async () => {
     // Fetch fresh proxy list from your provider
     return ['http://user:pass@newhost:8001', ...];
   },
 });
+
+// You can also trigger a refresh manually at any time
+await client.refreshProxies();
 ```
 
 ## Error Handling
+
+ghostfetch throws specific error classes so you can handle each scenario precisely:
+
+- **`CloudflareJSChallengeError`** — the target site requires a browser-level JS challenge that CycleTLS can't solve. You'll need puppeteer-extra with stealth plugin for this.
+- **`NoProxyAvailableError`** — all proxies are banned and `forceProxy` is not enabled, or the proxy list is empty.
+- **`MaxRetriesExceededError`** — all retry attempts failed. Contains `.attempts` count and `.lastError` with the final error details.
 
 ```ts
 import {
