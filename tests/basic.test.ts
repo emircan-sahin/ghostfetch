@@ -4,7 +4,7 @@ import { GhostFetch } from '../src';
 describe('GhostFetch — basic request', () => {
   const client = new GhostFetch({
     timeout: 15000,
-    retry: { maxRetries: 0 },
+    retry: { delays: [] },
   });
 
   afterAll(async () => {

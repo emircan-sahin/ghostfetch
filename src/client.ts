@@ -37,7 +37,10 @@ export class GhostFetch {
 
     // Auto health check on init if proxies provided
     if (config.proxies?.length) {
-      this.healthCheckPromise = this.healthCheckProxies(config.proxies);
+      this.healthCheckPromise = this.healthCheckProxies(config.proxies).catch((err) => {
+        // Prevent unhandled rejection — return empty result so ready() resolves safely
+        return { total: config.proxies!.length, healthy: 0, dead: config.proxies!.length, countries: {}, proxies: {} };
+      });
     }
 
     // Start proxy refresh interval only if both callback and interval are provided
@@ -183,7 +186,7 @@ export class GhostFetch {
         }
 
         // 2. Instance-level interceptors — first match takes full ownership
-        const { matched, action, interceptor } = checkInterceptors(url, response, this.interceptors);
+        const { matched, action, interceptor } = checkInterceptors(url, response, [...this.interceptors]);
 
         if (matched) {
           if (action === 'skip' || action === null) {
@@ -400,6 +403,7 @@ export class GhostFetch {
     const healthy: string[] = [];
     const proxyDetails: Record<string, string | null> = {};
     const countries: Record<string, number> = {};
+    const countryEntries: [string, string][] = [];
 
     // Process in batches
     for (let i = 0; i < proxies.length; i += HEALTH_BATCH_CONCURRENCY) {
@@ -423,7 +427,7 @@ export class GhostFetch {
               const country: string | null = data.country ?? null;
 
               if (country) {
-                this.proxyManager.setCountry(proxy, country);
+                countryEntries.push([proxy, country]);
                 countries[country] = (countries[country] ?? 0) + 1;
               }
 
@@ -435,12 +439,16 @@ export class GhostFetch {
             }
           }
           // All 3 attempts failed — proxy is dead
+          proxyDetails[proxy] = null;
         }),
       );
     }
 
-    // Add only healthy proxies to the manager
+    // Add only healthy proxies to the manager, then restore country data
     this.proxyManager.replaceProxies(healthy);
+    for (const [proxy, country] of countryEntries) {
+      this.proxyManager.setCountry(proxy, country);
+    }
 
     return {
       total: proxies.length,
