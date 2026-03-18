@@ -7,7 +7,8 @@ process.kill = function (pid: number, signal?: string | number) {
   try {
     return originalKill(pid, signal);
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return true;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH' || code === 'EPERM') return true;
     throw err;
   }
 } as typeof process.kill;
