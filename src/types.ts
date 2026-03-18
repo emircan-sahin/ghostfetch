@@ -105,6 +105,9 @@ export interface GhostFetchResponse {
 
   /** Final URL (after redirects) */
   url: string;
+
+  /** Parse body as JSON */
+  json: <T = unknown>() => T;
 }
 
 export interface GhostFetchError {

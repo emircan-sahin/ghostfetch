@@ -387,11 +387,14 @@ export class GhostFetch {
 
     const response = await client(url, cycleTLSOptions, method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options');
 
+    const body = response.body == null ? '' : typeof response.body === 'string' ? response.body : JSON.stringify(response.body);
+
     return {
       status: response.status,
       headers: (response.headers ?? {}) as Record<string, string>,
-      body: response.body == null ? '' : typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
+      body,
       url: response.finalUrl || url,
+      json: <T = unknown>() => JSON.parse(body) as T,
     };
   }
 
