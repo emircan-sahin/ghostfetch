@@ -97,6 +97,9 @@ export class GhostFetch {
     if (!this.config.onProxyRefresh) return;
     if (this.refreshing) return; // prevent overlapping refreshes
 
+    // Wait for any in-progress health check (e.g., initial startup)
+    if (this.healthCheckPromise) await this.healthCheckPromise;
+
     this.refreshing = true;
     try {
       const proxies = await this.config.onProxyRefresh();
@@ -167,11 +170,6 @@ export class GhostFetch {
       try {
         const response = await this.executeRequest(method, url, proxy, options);
 
-        // Check for Cloudflare JS challenge
-        if (isCloudflareChallenge(response)) {
-          throw new CloudflareJSChallengeError(url, proxy ?? undefined);
-        }
-
         // 1. Per-request interceptor takes highest priority
         if (options?.interceptor) {
           const reqAction = options.interceptor.check(response);
@@ -201,7 +199,12 @@ export class GhostFetch {
           continue;
         }
 
-        // 3. No interceptor matched → check default retry statuses (429, 503, 407)
+        // 3. Cloudflare JS challenge (only when no interceptor claimed the response)
+        if (isCloudflareChallenge(response)) {
+          throw new CloudflareJSChallengeError(url, proxy ?? undefined);
+        }
+
+        // 4. No interceptor matched → check default retry statuses (429, 503, 407)
         const defaultRetry = checkDefaultRetryStatus(response.status);
         if (defaultRetry) {
           if (proxy) {
