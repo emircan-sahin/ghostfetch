@@ -26,6 +26,7 @@ export class GhostFetch {
   private config: GhostFetchConfig;
   private retryDefaults: RetryConfig;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private refreshing = false;
   private healthCheckPromise: Promise<HealthCheckResult> | null = null;
 
   constructor(config: GhostFetchConfig = {}) {
@@ -91,9 +92,17 @@ export class GhostFetch {
   /** Manually refresh the proxy list via the onProxyRefresh callback. */
   async refreshProxies(): Promise<void> {
     if (!this.config.onProxyRefresh) return;
-    const proxies = await this.config.onProxyRefresh();
-    this.proxyManager.replaceProxies([]);
-    await this.healthCheckProxies(proxies);
+    if (this.refreshing) return; // prevent overlapping refreshes
+
+    this.refreshing = true;
+    try {
+      const proxies = await this.config.onProxyRefresh();
+      // Health check first — only replace if it succeeds
+      // healthCheckProxies calls replaceProxies internally with healthy list
+      await this.healthCheckProxies(proxies);
+    } finally {
+      this.refreshing = false;
+    }
   }
 
   /** Get proxy manager stats. */
@@ -189,7 +198,7 @@ export class GhostFetch {
           continue;
         }
 
-        // 2. No interceptor matched → check default retry statuses (429, 503, 407)
+        // 3. No interceptor matched → check default retry statuses (429, 503, 407)
         const defaultRetry = checkDefaultRetryStatus(response.status);
         if (defaultRetry) {
           if (proxy) {
@@ -210,7 +219,7 @@ export class GhostFetch {
           continue;
         }
 
-        // 3. Normal response — return it
+        // 4. Normal response — return it
         if (proxy) this.proxyManager.reportSuccess(proxy);
         return response;
       } catch (error) {
@@ -271,8 +280,12 @@ export class GhostFetch {
       return null;
     }
 
-    // Proxies exist but all banned
+    // Proxies exist but all banned or none match the country filter
     if (forceProxy) {
+      // If filtering by country and no proxies exist for that country, fail immediately
+      if (country && this.proxyManager.getProxiesByCountry(country).length === 0) {
+        throw new NoProxyAvailableError();
+      }
       // Wait until one becomes available (ban expires or refresh happens)
       return this.proxyManager.waitForProxy(opts);
     }
@@ -356,8 +369,13 @@ export class GhostFetch {
         ? options.body
         : JSON.stringify(options.body);
 
-      if (typeof options.body !== 'string' && !headers['content-type']) {
-        headers['content-type'] = 'application/json';
+      if (typeof options.body !== 'string') {
+        const hasContentType = Object.keys(headers).some(
+          (k) => k.toLowerCase() === 'content-type',
+        );
+        if (!hasContentType) {
+          headers['content-type'] = 'application/json';
+        }
       }
     }
 
@@ -366,7 +384,7 @@ export class GhostFetch {
     return {
       status: response.status,
       headers: (response.headers ?? {}) as Record<string, string>,
-      body: typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
+      body: response.body == null ? '' : typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
       url,
     };
   }

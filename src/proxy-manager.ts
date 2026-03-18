@@ -1,4 +1,5 @@
 import { BanConfig } from './types';
+import { NoProxyAvailableError } from './errors';
 
 interface BanEntry {
   bannedAt: number;
@@ -66,21 +67,52 @@ export class ProxyManager {
   /**
    * Wait until a proxy becomes available (bans expire or list is refreshed).
    * Resolves with the proxy string. Supports country filter.
+   *
+   * Automatically calculates timeout from the earliest ban expiry.
+   * If no ban will ever expire (shouldn't happen), times out after 5 minutes.
    */
   waitForProxy(opts?: GetProxyOptions): Promise<string> {
-    // Check immediately first
     const immediate = this.getProxy(opts);
     if (immediate) return Promise.resolve(immediate);
 
-    return new Promise((resolve) => {
+    // Calculate max wait from earliest ban expiry + buffer
+    const maxWait = this.getEarliestBanExpiry() ?? 5 * 60 * 1000;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        clearInterval(interval);
+        reject(new NoProxyAvailableError());
+      }, maxWait);
+
       const interval = setInterval(() => {
         const proxy = this.getProxy(opts);
         if (proxy) {
+          clearTimeout(timeout);
           clearInterval(interval);
           resolve(proxy);
         }
       }, WAIT_POLL_INTERVAL);
     });
+  }
+
+  /** Get ms until the earliest ban expires, or null if no active bans. */
+  private getEarliestBanExpiry(): number | null {
+    if (this.banConfig === false) return null;
+
+    const now = Date.now();
+    let earliest = Infinity;
+
+    for (const [, entry] of this.banMap) {
+      if (!entry.bannedAt) continue;
+      const expiresAt = entry.bannedAt + this.banConfig.duration;
+      const remaining = expiresAt - now;
+      if (remaining > 0 && remaining < earliest) {
+        earliest = remaining;
+      }
+    }
+
+    // Add 1s buffer so the ban is definitely expired when we check
+    return earliest === Infinity ? null : earliest + 1000;
   }
 
   /** Get all currently available (non-banned) proxies. */
@@ -115,7 +147,8 @@ export class ProxyManager {
     const entry = this.banMap.get(proxy);
 
     if (entry && (now - entry.lastFailure) < DEDUP_WINDOW) {
-      return entry.bannedAt > 0;
+      // Check if actually still banned (not expired)
+      return entry.bannedAt > 0 && (now - entry.bannedAt) < this.banConfig.duration;
     }
 
     const failCount = (entry?.failCount ?? 0) + 1;
