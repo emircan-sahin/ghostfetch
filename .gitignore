@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .claude/
+CLAUDE.md
 .env
 .env.*
 *.tgz
