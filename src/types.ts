@@ -8,8 +8,8 @@ export interface GhostFetchConfig {
   /** Retry configuration */
   retry?: RetryConfig;
 
-  /** Proxy ban configuration */
-  ban?: BanConfig;
+  /** Proxy ban configuration. Set to false to disable banning entirely. */
+  ban?: BanConfig | false;
 
   /**
    * If true, requests will wait until a proxy becomes available when all are
@@ -83,6 +83,14 @@ export interface Interceptor {
   check: (response: GhostFetchResponse) => InterceptorAction;
 }
 
+/**
+ * Per-request interceptor — same as Interceptor but without `match` and `name`
+ * since it applies to the specific request URL.
+ */
+export interface RequestInterceptor {
+  check: (response: GhostFetchResponse) => InterceptorAction;
+}
+
 export type ErrorType = 'proxy' | 'server' | 'ambiguous';
 
 export interface GhostFetchResponse {
@@ -141,6 +149,12 @@ export interface RequestOptions {
    * Defaults to instance-level forceProxy (which defaults to false).
    */
   forceProxy?: boolean;
+
+  /**
+   * Per-request interceptor. Takes priority over instance-level interceptors.
+   * No `match` needed — it applies to this request's URL automatically.
+   */
+  interceptor?: RequestInterceptor;
 
   /**
    * Require a proxy from this country (ISO 3166-1 alpha-2, e.g. 'US', 'DE').

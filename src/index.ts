@@ -13,6 +13,7 @@ export type {
   HealthCheckResult,
   Interceptor,
   InterceptorAction,
+  RequestInterceptor,
   RequestOptions,
   RetryConfig,
   BanConfig,

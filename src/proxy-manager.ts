@@ -25,12 +25,12 @@ export interface GetProxyOptions {
 export class ProxyManager {
   private proxies: string[] = [];
   private banMap = new Map<string, BanEntry>();
-  private banConfig: Required<BanConfig>;
+  private banConfig: Required<BanConfig> | false;
   private countryMap = new Map<string, string>(); // proxy → country code
 
-  constructor(proxies: string[], banConfig?: BanConfig) {
+  constructor(proxies: string[], banConfig?: BanConfig | false) {
     this.proxies = [...proxies];
-    this.banConfig = { ...DEFAULT_BAN, ...banConfig };
+    this.banConfig = banConfig === false ? false : { ...DEFAULT_BAN, ...banConfig };
   }
 
   /**
@@ -85,12 +85,15 @@ export class ProxyManager {
 
   /** Get all currently available (non-banned) proxies. */
   getAvailableProxies(): string[] {
+    if (this.banConfig === false) return [...this.proxies];
+
     const now = Date.now();
+    const duration = this.banConfig.duration;
     return this.proxies.filter((proxy) => {
       const ban = this.banMap.get(proxy);
       if (!ban) return true;
       if (!ban.bannedAt) return true;
-      if (now - ban.bannedAt >= this.banConfig.duration) {
+      if (now - ban.bannedAt >= duration) {
         this.banMap.delete(proxy);
         return true;
       }
@@ -106,6 +109,8 @@ export class ProxyManager {
    * moment count as a single failure).
    */
   reportFailure(proxy: string): boolean {
+    if (this.banConfig === false) return false;
+
     const now = Date.now();
     const entry = this.banMap.get(proxy);
 

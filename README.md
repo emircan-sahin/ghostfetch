@@ -37,7 +37,7 @@ const client = new GhostFetch({
   ],
   timeout: 30000,
   retry: { delays: [5000, 15000, 30000] }, // 3 retries: wait 5s, 15s, 30s
-  ban: { maxFailures: 3, duration: 60 * 60 * 1000 },
+  ban: { maxFailures: 3, duration: 60 * 60 * 1000 }, // or ban: false to disable
 });
 
 // Wait for health check to complete
@@ -52,6 +52,12 @@ console.log(res.status, res.body);
 
 ## Custom Interceptors
 
+Interceptors let you define per-site response handling. You can add them at the instance level (applies to all matching requests) or at the request level (applies to that single request only).
+
+### Instance-level interceptor
+
+Matches requests by URL. First matching interceptor takes full ownership — default status handling (429, 503, etc.) is bypassed.
+
 ```ts
 client.addInterceptor({
   name: 'example-api',
@@ -64,6 +70,30 @@ client.addInterceptor({
   },
 });
 ```
+
+### Request-level interceptor
+
+No `match` needed — it applies to this specific request. Takes priority over instance-level interceptors.
+
+```ts
+const res = await client.get('https://special-api.com/data', {
+  interceptor: {
+    check: (res) => {
+      if (res.status === 401) return 'skip';
+      if (res.status === 200 && res.body.includes('error')) return 'retry';
+      return null;
+    },
+  },
+});
+```
+
+### Interceptor priority
+
+1. **Request-level interceptor** — checked first, if it returns non-null action, it wins
+2. **Instance-level interceptors** — checked next, first `match` takes ownership
+3. **Default status handling** — only runs if no interceptor claimed the response
+
+### Actions
 
 | Action | Proxy effect | Retry | Default bypass |
 |--------|-------------|-------|----------------|

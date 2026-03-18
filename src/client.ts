@@ -160,41 +160,31 @@ export class GhostFetch {
           throw new CloudflareJSChallengeError(url, proxy ?? undefined);
         }
 
-        // 1. Run custom interceptors — first match takes full ownership
+        // 1. Per-request interceptor takes highest priority
+        if (options?.interceptor) {
+          const reqAction = options.interceptor.check(response);
+          if (reqAction !== null) {
+            const result = this.handleInterceptorAction(reqAction, 'request', response, proxy);
+            if (result === 'return') { return response; }
+            lastError = result.error;
+            lastFailedProxy = proxy;
+            continue;
+          }
+          // null → fall through to instance interceptors
+        }
+
+        // 2. Instance-level interceptors — first match takes full ownership
         const { matched, action, interceptor } = checkInterceptors(url, response, this.interceptors);
 
         if (matched) {
-          const iName = interceptor?.name ?? 'unnamed';
-
           if (action === 'skip' || action === null) {
-            // skip: return response as-is / null: interceptor doesn't care but still bypasses defaults
             if (proxy) this.proxyManager.reportSuccess(proxy);
             return response;
           }
 
-          if (action === 'ban') {
-            // Penalize proxy + retry
-            if (proxy) this.proxyManager.reportFailure(proxy);
-            lastError = new GhostFetchRequestError({
-              type: 'proxy',
-              message: `Interceptor "${iName}": ban (HTTP ${response.status})`,
-              status: response.status,
-              body: response.body,
-              proxy: proxy ?? undefined,
-            });
-            lastFailedProxy = proxy;
-            continue;
-          }
-
-          // action === 'retry'
-          if (proxy) this.proxyManager.reportSuccess(proxy);
-          lastError = new GhostFetchRequestError({
-            type: 'server',
-            message: `Interceptor "${iName}": retry (HTTP ${response.status})`,
-            status: response.status,
-            body: response.body,
-            proxy: proxy ?? undefined,
-          });
+          const result = this.handleInterceptorAction(action, interceptor?.name ?? 'unnamed', response, proxy);
+          if (result === 'return') { return response; }
+          lastError = result.error;
           lastFailedProxy = proxy;
           continue;
         }
@@ -289,6 +279,44 @@ export class GhostFetch {
 
     // Not forced — proceed without proxy
     return null;
+  }
+
+  /** Handle an interceptor action (retry/ban/skip). Returns 'return' to send response, or { error } to continue retry loop. */
+  private handleInterceptorAction(
+    action: 'retry' | 'ban' | 'skip',
+    name: string,
+    response: GhostFetchResponse,
+    proxy: string | null,
+  ): 'return' | { error: GhostFetchRequestError } {
+    if (action === 'skip') {
+      if (proxy) this.proxyManager.reportSuccess(proxy);
+      return 'return';
+    }
+
+    if (action === 'ban') {
+      if (proxy) this.proxyManager.reportFailure(proxy);
+      return {
+        error: new GhostFetchRequestError({
+          type: 'proxy',
+          message: `Interceptor "${name}": ban (HTTP ${response.status})`,
+          status: response.status,
+          body: response.body,
+          proxy: proxy ?? undefined,
+        }),
+      };
+    }
+
+    // retry
+    if (proxy) this.proxyManager.reportSuccess(proxy);
+    return {
+      error: new GhostFetchRequestError({
+        type: 'server',
+        message: `Interceptor "${name}": retry (HTTP ${response.status})`,
+        status: response.status,
+        body: response.body,
+        proxy: proxy ?? undefined,
+      }),
+    };
   }
 
   private async executeRequest(
