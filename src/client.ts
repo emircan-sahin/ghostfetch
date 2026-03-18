@@ -44,10 +44,9 @@ export class GhostFetch {
       this.healthCheckPromise = this.healthCheckProxies(config.proxies);
     }
 
-    // Start proxy refresh interval if configured
-    if (config.onProxyRefresh) {
-      const interval = config.proxyRefreshInterval ?? 3600000;
-      this.refreshTimer = setInterval(() => this.refreshProxies(), interval);
+    // Start proxy refresh interval only if both callback and interval are provided
+    if (config.onProxyRefresh && config.proxyRefreshInterval) {
+      this.refreshTimer = setInterval(() => this.refreshProxies(), config.proxyRefreshInterval);
     }
   }
 

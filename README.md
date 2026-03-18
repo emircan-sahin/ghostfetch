@@ -116,20 +116,30 @@ const protectedData = await client.get('https://protected-api.com/data', {
 
 ## Proxy Refresh
 
-Provide an `onProxyRefresh` callback to periodically fetch a fresh proxy list from your provider. When triggered, all existing bans are cleared and the new proxies go through health check before entering the pool.
+Provide an `onProxyRefresh` callback to fetch a fresh proxy list from your provider. When triggered, all existing bans are cleared and the new proxies go through health check before entering the pool.
+
+| Config | Behavior |
+|--------|----------|
+| `onProxyRefresh` only | No automatic refresh — call `client.refreshProxies()` manually |
+| `onProxyRefresh` + `proxyRefreshInterval` | Auto-refresh at the given interval |
+| Neither | No refresh capability — initial proxy list is used for the lifetime |
 
 ```ts
+// Auto-refresh every hour
 const client = new GhostFetch({
   proxies: [...],
-  proxyRefreshInterval: 60 * 60 * 1000, // every 1 hour
+  proxyRefreshInterval: 60 * 60 * 1000,
   onProxyRefresh: async () => {
-    // Fetch fresh proxy list from your provider
     return ['http://user:pass@newhost:8001', ...];
   },
 });
 
-// You can also trigger a refresh manually at any time
-await client.refreshProxies();
+// Or manual-only: no interval, call when you need it
+const client2 = new GhostFetch({
+  proxies: [...],
+  onProxyRefresh: async () => fetchFromProvider(),
+});
+await client2.refreshProxies(); // triggers onProxyRefresh → health check → pool updated
 ```
 
 ## Error Handling
