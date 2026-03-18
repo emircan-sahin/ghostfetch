@@ -391,7 +391,7 @@ export class GhostFetch {
       status: response.status,
       headers: (response.headers ?? {}) as Record<string, string>,
       body: response.body == null ? '' : typeof response.body === 'string' ? response.body : JSON.stringify(response.body),
-      url,
+      url: response.finalUrl || url,
     };
   }
 

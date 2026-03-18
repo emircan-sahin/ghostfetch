@@ -103,7 +103,7 @@ export interface GhostFetchResponse {
   /** Response body as string */
   body: string;
 
-  /** Request URL */
+  /** Final URL (after redirects) */
   url: string;
 }
 
