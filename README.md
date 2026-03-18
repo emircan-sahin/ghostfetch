@@ -36,7 +36,7 @@ const client = new GhostFetch({
     'http://user:pass@host:8002',
   ],
   timeout: 30000,
-  retry: { maxRetries: 3, delay: 1000 },
+  retry: { delays: [5000, 15000, 30000] }, // 3 retries: wait 5s, 15s, 30s
   ban: { maxFailures: 3, duration: 60 * 60 * 1000 },
 });
 

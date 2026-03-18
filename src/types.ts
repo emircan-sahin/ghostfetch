@@ -38,17 +38,13 @@ export interface GhostFetchConfig {
 }
 
 export interface RetryConfig {
-  /** Max number of retries (default: 3) */
-  maxRetries?: number;
-
-  /** Base delay between retries in ms (default: 1000) */
-  delay?: number;
-
-  /** Backoff multiplier (default: 2) */
-  backoff?: number;
-
-  /** Max delay cap in ms (default: 30000) */
-  maxDelay?: number;
+  /**
+   * Delay before each retry in ms. Array length = number of retries.
+   *
+   * @example [5000, 15000, 30000] → 3 retries: wait 5s, 15s, 30s
+   * @default [1000, 2000, 4000]
+   */
+  delays?: number[];
 }
 
 export interface BanConfig {

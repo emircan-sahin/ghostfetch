@@ -12,12 +12,7 @@ import {
   HttpMethod,
 } from './types';
 
-const DEFAULT_RETRY: Required<RetryConfig> = {
-  maxRetries: 3,
-  delay: 1000,
-  backoff: 2,
-  maxDelay: 30000,
-};
+const DEFAULT_DELAYS = [1000, 2000, 4000];
 
 const DEFAULT_TIMEOUT = 30000;
 const HEALTH_BATCH_CONCURRENCY = 10;
@@ -29,7 +24,7 @@ export class GhostFetch {
   private proxyManager: ProxyManager;
   private interceptors: Interceptor[] = [];
   private config: GhostFetchConfig;
-  private retryDefaults: Required<RetryConfig>;
+  private retryDefaults: RetryConfig;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private healthCheckPromise: Promise<HealthCheckResult> | null = null;
 
@@ -37,7 +32,7 @@ export class GhostFetch {
     this.config = config;
     // Start with empty proxy list — healthCheck will populate it
     this.proxyManager = new ProxyManager([], config.ban);
-    this.retryDefaults = { ...DEFAULT_RETRY, ...config.retry };
+    this.retryDefaults = { delays: config.retry?.delays ?? DEFAULT_DELAYS };
 
     // Auto health check on init if proxies provided
     if (config.proxies?.length) {
@@ -142,19 +137,16 @@ export class GhostFetch {
     // Wait for health check to finish before first request
     await this.ready();
 
-    const retryConfig = { ...this.retryDefaults, ...options?.retry };
+    const delays = options?.retry?.delays ?? this.retryDefaults.delays ?? DEFAULT_DELAYS;
+    const maxAttempts = delays.length + 1; // first attempt + retries
     const forceProxy = options?.forceProxy ?? this.config.forceProxy ?? false;
     let lastError: GhostFetchRequestError | null = null;
     let lastFailedProxy: string | null | undefined = null;
 
-    for (let attempt = 0; attempt <= retryConfig.maxRetries; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       // Wait before retry (not on first attempt)
       if (attempt > 0) {
-        const delay = Math.min(
-          retryConfig.delay * Math.pow(retryConfig.backoff, attempt - 1),
-          retryConfig.maxDelay,
-        );
-        await sleep(delay);
+        await sleep(delays[attempt - 1]);
       }
 
       // Pick a proxy
@@ -264,7 +256,7 @@ export class GhostFetch {
       }
     }
 
-    throw new MaxRetriesExceededError(retryConfig.maxRetries + 1, lastError!);
+    throw new MaxRetriesExceededError(maxAttempts, lastError!);
   }
 
   /**
