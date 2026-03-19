@@ -355,27 +355,57 @@ export class GhostFetch {
     const cycleTLSOptions: CycleTLSRequestOptions = {
       headers,
       timeout,
-      disableRedirect: false,
+      disableRedirect: options?.disableRedirect ?? this.config.disableRedirect ?? false,
     };
 
     if (proxy) {
       cycleTLSOptions.proxy = proxy;
     }
 
-    if (this.config.ja3) {
-      cycleTLSOptions.ja3 = this.config.ja3;
-    }
+    // Client identity fingerprints (config-only)
+    if (this.config.ja3) cycleTLSOptions.ja3 = this.config.ja3;
+    if (this.config.userAgent) cycleTLSOptions.userAgent = this.config.userAgent;
+    if (this.config.ja4r) cycleTLSOptions.ja4r = this.config.ja4r;
+    if (this.config.http2Fingerprint) cycleTLSOptions.http2Fingerprint = this.config.http2Fingerprint;
+    if (this.config.quicFingerprint) cycleTLSOptions.quicFingerprint = this.config.quicFingerprint;
+    if (this.config.disableGrease != null) cycleTLSOptions.disableGrease = this.config.disableGrease;
 
-    if (this.config.userAgent) {
-      cycleTLSOptions.userAgent = this.config.userAgent;
-    }
+    // Per-request overrides (request > config)
+    const headerOrder = options?.headerOrder ?? this.config.headerOrder;
+    if (headerOrder) cycleTLSOptions.headerOrder = headerOrder;
 
+    const orderAsProvided = options?.orderAsProvided ?? this.config.orderAsProvided;
+    if (orderAsProvided != null) cycleTLSOptions.orderAsProvided = orderAsProvided;
+
+    const insecureSkipVerify = options?.insecureSkipVerify ?? this.config.insecureSkipVerify;
+    if (insecureSkipVerify != null) cycleTLSOptions.insecureSkipVerify = insecureSkipVerify;
+
+    const forceHTTP1 = options?.forceHTTP1 ?? this.config.forceHTTP1;
+    if (forceHTTP1 != null) cycleTLSOptions.forceHTTP1 = forceHTTP1;
+
+    const forceHTTP3 = options?.forceHTTP3 ?? this.config.forceHTTP3;
+    if (forceHTTP3 != null) cycleTLSOptions.forceHTTP3 = forceHTTP3;
+
+    const serverName = options?.serverName ?? this.config.serverName;
+    if (serverName) cycleTLSOptions.serverName = serverName;
+
+    const cookies = options?.cookies ?? this.config.cookies;
+    if (cookies) cycleTLSOptions.cookies = cookies;
+
+    // Body handling
     if (options?.body) {
-      cycleTLSOptions.body = typeof options.body === 'string'
-        ? options.body
-        : JSON.stringify(options.body);
-
-      if (typeof options.body !== 'string') {
+      if (options.body instanceof URLSearchParams) {
+        cycleTLSOptions.body = options.body;
+        const hasContentType = Object.keys(headers).some(
+          (k) => k.toLowerCase() === 'content-type',
+        );
+        if (!hasContentType) {
+          headers['content-type'] = 'application/x-www-form-urlencoded';
+        }
+      } else if (typeof options.body === 'string') {
+        cycleTLSOptions.body = options.body;
+      } else {
+        cycleTLSOptions.body = JSON.stringify(options.body);
         const hasContentType = Object.keys(headers).some(
           (k) => k.toLowerCase() === 'content-type',
         );
@@ -387,7 +417,7 @@ export class GhostFetch {
 
     const response = await client(url, cycleTLSOptions, method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options');
 
-    const body = response.body == null ? '' : typeof response.body === 'string' ? response.body : JSON.stringify(response.body);
+    const body = decodeResponseData(response.data);
 
     return {
       status: response.status,
@@ -429,7 +459,8 @@ export class GhostFetch {
                 'get',
               );
 
-              const data = typeof res.body === 'string' ? JSON.parse(res.body) : res.body;
+              const decoded = decodeResponseData(res.data);
+              const data = decoded ? JSON.parse(decoded) : {};
               const country: string | null = data.country ?? null;
 
               if (country) {
@@ -486,4 +517,14 @@ export class GhostFetch {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Decode CycleTLS v2 response data — v2 returns native Buffer objects. */
+function decodeResponseData(data: unknown): string {
+  if (data == null) return '';
+  if (Buffer.isBuffer(data)) {
+    return data.length === 0 ? '' : data.toString('utf-8');
+  }
+  if (typeof data === 'string') return data;
+  return JSON.stringify(data);
 }

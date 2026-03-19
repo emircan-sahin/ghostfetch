@@ -1,3 +1,16 @@
+export interface Cookie {
+  name: string;
+  value: string;
+  path?: string;
+  domain?: string;
+  expires?: string;
+  rawExpires?: string;
+  maxAge?: number;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: string;
+}
+
 export interface GhostFetchConfig {
   /** List of proxy URLs in format http://user:pass@host:port */
   proxies?: string[];
@@ -35,6 +48,42 @@ export interface GhostFetchConfig {
 
   /** User-Agent string (optional — CycleTLS picks a realistic default) */
   userAgent?: string;
+
+  /** JA4R fingerprint string (client identity — applied to all requests) */
+  ja4r?: string;
+
+  /** HTTP/2 frame settings fingerprint (client identity — applied to all requests) */
+  http2Fingerprint?: string;
+
+  /** QUIC fingerprint (client identity — applied to all requests) */
+  quicFingerprint?: string;
+
+  /** Disable GREASE (applied to all requests) */
+  disableGrease?: boolean;
+
+  /** Default header order for all requests */
+  headerOrder?: string[];
+
+  /** Send headers in the order they are provided */
+  orderAsProvided?: boolean;
+
+  /** Disable following redirects (default: false) */
+  disableRedirect?: boolean;
+
+  /** Skip TLS certificate verification */
+  insecureSkipVerify?: boolean;
+
+  /** Force HTTP/1.1 for all requests */
+  forceHTTP1?: boolean;
+
+  /** Force HTTP/3 (QUIC) for all requests */
+  forceHTTP3?: boolean;
+
+  /** Override TLS SNI server name */
+  serverName?: string;
+
+  /** Default cookies for all requests */
+  cookies?: Cookie[] | Record<string, string>;
 }
 
 export interface RetryConfig {
@@ -138,7 +187,7 @@ export interface RequestOptions {
   timeout?: number;
 
   /** Request body (for POST, PUT, PATCH) */
-  body?: string | Record<string, unknown>;
+  body?: string | Record<string, unknown> | URLSearchParams;
 
   /** Force a specific proxy for this request */
   proxy?: string;
@@ -163,6 +212,30 @@ export interface RequestOptions {
    * Require a proxy from this country (ISO 3166-1 alpha-2, e.g. 'US', 'DE').
    */
   country?: string;
+
+  /** Override header order for this request */
+  headerOrder?: string[];
+
+  /** Send headers in the order they are provided */
+  orderAsProvided?: boolean;
+
+  /** Disable following redirects for this request */
+  disableRedirect?: boolean;
+
+  /** Skip TLS certificate verification for this request */
+  insecureSkipVerify?: boolean;
+
+  /** Force HTTP/1.1 for this request */
+  forceHTTP1?: boolean;
+
+  /** Force HTTP/3 (QUIC) for this request */
+  forceHTTP3?: boolean;
+
+  /** Override TLS SNI server name for this request */
+  serverName?: string;
+
+  /** Cookies for this request (replaces config-level cookies) */
+  cookies?: Cookie[] | Record<string, string>;
 }
 
 export interface HealthCheckResult {

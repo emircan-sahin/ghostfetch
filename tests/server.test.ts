@@ -78,6 +78,28 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url === '/echo-raw' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ body, contentType: req.headers['content-type'], headers: req.headers }));
+    });
+    return;
+  }
+
+  if (url === '/redirect') {
+    res.writeHead(302, { location: `http://localhost:${port}/ok` });
+    res.end();
+    return;
+  }
+
+  if (url === '/echo-cookies') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ cookie: req.headers['cookie'] ?? null }));
+    return;
+  }
+
   res.writeHead(404);
   res.end('not found');
 });
@@ -256,6 +278,92 @@ describe('request-level interceptor', () => {
     expect(res.status).toBe(401);
 
     client.removeInterceptor('instance-retry');
+  });
+});
+
+describe('CycleTLS v2 options', () => {
+  it('POST with URLSearchParams sets correct content-type', async () => {
+    const res = await client.post(u('/echo-raw'), {
+      body: new URLSearchParams({ username: 'foo', password: 'bar' }),
+    });
+    const data = JSON.parse(res.body);
+    expect(data.contentType).toBe('application/x-www-form-urlencoded');
+    expect(data.body).toContain('username=foo');
+    expect(data.body).toContain('password=bar');
+  });
+
+  it('URLSearchParams does not override explicit content-type', async () => {
+    const res = await client.post(u('/echo-raw'), {
+      body: new URLSearchParams({ a: '1' }),
+      headers: { 'content-type': 'text/plain' },
+    });
+    const data = JSON.parse(res.body);
+    expect(data.contentType).toBe('text/plain');
+  });
+
+  it('disableRedirect returns 302 instead of following', async () => {
+    const res = await client.get(u('/redirect'), {
+      disableRedirect: true,
+    });
+    expect(res.status).toBe(302);
+  });
+
+  it('without disableRedirect, follows redirect to /ok', async () => {
+    const res = await client.get(u('/redirect'));
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ message: 'success' });
+  });
+
+  it('config-level disableRedirect applies to all requests', async () => {
+    const noRedirectClient = new GhostFetch({
+      retry: { delays: [] },
+      disableRedirect: true,
+    });
+
+    const res = await noRedirectClient.get(u('/redirect'));
+    expect(res.status).toBe(302);
+    await noRedirectClient.destroy();
+  });
+
+  it('per-request disableRedirect overrides config', async () => {
+    const noRedirectClient = new GhostFetch({
+      retry: { delays: [] },
+      disableRedirect: true,
+    });
+
+    const res = await noRedirectClient.get(u('/redirect'), {
+      disableRedirect: false,
+    });
+    expect(res.status).toBe(200);
+    await noRedirectClient.destroy();
+  });
+
+  it('config-level cookies are sent', async () => {
+    const cookieClient = new GhostFetch({
+      retry: { delays: [] },
+      cookies: { session: 'abc123', lang: 'en' },
+    });
+
+    const res = await cookieClient.get(u('/echo-cookies'));
+    const data = JSON.parse(res.body);
+    expect(data.cookie).toContain('session=abc123');
+    expect(data.cookie).toContain('lang=en');
+    await cookieClient.destroy();
+  });
+
+  it('per-request cookies replace config cookies', async () => {
+    const cookieClient = new GhostFetch({
+      retry: { delays: [] },
+      cookies: { session: 'old' },
+    });
+
+    const res = await cookieClient.get(u('/echo-cookies'), {
+      cookies: { token: 'new' },
+    });
+    const data = JSON.parse(res.body);
+    expect(data.cookie).toContain('token=new');
+    expect(data.cookie).not.toContain('session=old');
+    await cookieClient.destroy();
   });
 });
 

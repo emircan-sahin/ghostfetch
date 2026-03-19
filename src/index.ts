@@ -7,6 +7,7 @@ export {
   MaxRetriesExceededError,
 } from './errors';
 export type {
+  Cookie,
   GhostFetchConfig,
   GhostFetchResponse,
   GhostFetchError,
