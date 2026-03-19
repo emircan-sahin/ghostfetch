@@ -76,19 +76,19 @@ await client.get('https://example.com', {
 
 > **Tip:** `ja3`, `ja4r`, `http2Fingerprint`, and `userAgent` should come from the same browser profile. Mixing Chrome JA3 with Firefox User-Agent is a common detection vector.
 
-| Option | Config | Per-request | What it does |
-|--------|:------:|:-----------:|-------------|
-| `ja3` / `ja4r` | yes | — | TLS ClientHello fingerprint |
-| `http2Fingerprint` | yes | — | HTTP/2 SETTINGS frame fingerprint |
-| `quicFingerprint` | yes | — | QUIC transport parameters fingerprint |
-| `disableGrease` | yes | — | Disable random GREASE values |
-| `headerOrder` | yes | yes | Control header send order |
-| `orderAsProvided` | yes | yes | Send headers in provided order |
-| `forceHTTP1` / `forceHTTP3` | yes | yes | Force protocol version |
-| `disableRedirect` | yes | yes | Return 3xx instead of following |
-| `insecureSkipVerify` | yes | yes | Skip TLS cert validation |
-| `serverName` | yes | yes | Override TLS SNI hostname |
-| `cookies` | yes | yes | Send cookies (per-request replaces config) |
+| Option | Config | Per-request | Default | What it does |
+|--------|:------:|:-----------:|---------|-------------|
+| `ja3` / `ja4r` | yes | — | auto | TLS ClientHello fingerprint |
+| `http2Fingerprint` | yes | — | auto | HTTP/2 SETTINGS frame fingerprint |
+| `quicFingerprint` | yes | — | auto | QUIC transport parameters fingerprint |
+| `disableGrease` | yes | — | `false` | Disable random GREASE values |
+| `headerOrder` | yes | yes | auto | Control header send order |
+| `orderAsProvided` | yes | yes | `false` | Send headers in provided order |
+| `forceHTTP1` / `forceHTTP3` | yes | yes | `false` | Force protocol version |
+| `disableRedirect` | yes | yes | `false` | Return 3xx instead of following |
+| `insecureSkipVerify` | yes | yes | `false` | Skip TLS cert validation |
+| `serverName` | yes | yes | from URL | Override TLS SNI hostname |
+| `cookies` | yes | yes | none | Send cookies (per-request replaces config) |
 
 ## Request Body
 
