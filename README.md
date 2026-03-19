@@ -47,34 +47,40 @@ console.log(res.status, res.body);
 
 All fingerprint options are **config-level only** — they define the client identity and apply to every request. Other options can be set at config level (default) and overridden per-request.
 
+**Getting your fingerprint:** Open your browser and visit [`https://tls.peet.ws/api/all`](https://tls.peet.ws/api/all). The JSON response contains everything you need:
+
+| peet.ws field | GhostFetch option |
+|---|---|
+| `tls.ja3` | `ja3` |
+| `tls.ja4_r` | `ja4r` |
+| `http2.akamai_fingerprint` | `http2Fingerprint` |
+| `user_agent` | `userAgent` |
+| `http2.sent_frames[2].headers` | `headerOrder` (exclude pseudo-headers like `:method`, `:path`) |
+
 ```ts
 const client = new GhostFetch({
-  // Fingerprints (config-only — client identity)
-  ja3: '771,4865-4866-...',
-  ja4r: 't13d1516h2_...',
-  http2Fingerprint: '1:65536;2:0;...',
-  quicFingerprint: '...',
-  userAgent: 'Mozilla/5.0 ...',
-  disableGrease: true,
+  // Copy these from tls.peet.ws (use the same browser for all values)
+  ja3: '771,4865-4866-4867-...',
+  ja4r: 't13d1516h2_002f,0035,...',
+  http2Fingerprint: '1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p',
+  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...',
+  headerOrder: ['upgrade-insecure-requests', 'user-agent', 'accept', 'accept-encoding', 'accept-language'],
 
   // Protocol & behavior (config default, overridable per-request)
-  forceHTTP1: true,
   disableRedirect: false,
   insecureSkipVerify: false,
-  headerOrder: ['host', 'user-agent', 'accept'],
   cookies: { session: 'abc123' },
 });
 
 // Per-request override
 await client.get('https://example.com', {
-  forceHTTP1: false,
   disableRedirect: true,
   cookies: [{ name: 'token', value: 'xyz', domain: '.example.com' }],
   serverName: 'cdn.example.com',
 });
 ```
 
-> **Tip:** `ja3`, `ja4r`, `http2Fingerprint`, and `userAgent` should come from the same browser profile. Mixing Chrome JA3 with Firefox User-Agent is a common detection vector.
+> **Important:** All fingerprint values (`ja3`, `ja4r`, `http2Fingerprint`, `userAgent`) must come from the same browser. Mixing Chrome JA3 with Firefox User-Agent is a common detection vector.
 
 | Option | Config | Per-request | Default | What it does |
 |--------|:------:|:-----------:|---------|-------------|
