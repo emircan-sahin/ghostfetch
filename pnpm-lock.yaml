@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       cycletls:
-        specifier: ^1.0.26
-        version: 1.0.27
+        specifier: ^2.0.5
+        version: 2.0.5
       form-data:
         specifier: ^4.0.5
         version: 4.0.5
@@ -358,8 +358,8 @@ packages:
     resolution: {integrity: sha512-FQN4MRfuJeHf7cBbBMJFXhKSDq+2kAArBlmRBvcvFE5BB1HZKXtSFASDhdlz9zOYwxh8lDdnvmMOe/+5cdoEdg==}
     engines: {node: '>= 0.8'}
 
-  cycletls@1.0.27:
-    resolution: {integrity: sha512-LZPyuj32BZm/rIt35dmim2ykb1hodwkFXc7K4zXei2p/ykcb7qNOf+JeBK0Ls5lyCbmyDyYkHYQmkHfow0JmNw==}
+  cycletls@2.0.5:
+    resolution: {integrity: sha512-Nud94JBPZu1JTXWJ1GpIoQNR1xxU84WYt7G0dxzwpUe1xAAs6YbihvlQhIhPv9xljjonINJfWPFaeb8Ex1wLhQ==}
     engines: {node: '>=18.0.0'}
 
   debug@4.4.3:
@@ -600,12 +600,12 @@ packages:
     engines: {node: '>=8'}
     hasBin: true
 
-  ws@7.5.10:
-    resolution: {integrity: sha512-+dbF1tHwZpXcbOJdVOkzLDxZP1ailvSxM6ZweXTegylPny803bFhA+vqBYw4s31NSAk4S2Qz+AKXK9a4wkdjcQ==}
-    engines: {node: '>=8.3.0'}
+  ws@8.19.0:
+    resolution: {integrity: sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==}
+    engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
-      utf-8-validate: ^5.0.2
+      utf-8-validate: '>=5.0.2'
     peerDependenciesMeta:
       bufferutil:
         optional: true
@@ -835,10 +835,11 @@ snapshots:
     dependencies:
       delayed-stream: 1.0.0
 
-  cycletls@1.0.27:
+  cycletls@2.0.5:
     dependencies:
       '@types/node': 20.19.37
-      ws: 7.5.10
+      form-data: 4.0.5
+      ws: 8.19.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -1099,4 +1100,4 @@ snapshots:
       siginfo: 2.0.0
       stackback: 0.0.2
 
-  ws@7.5.10: {}
+  ws@8.19.0: {}
