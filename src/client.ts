@@ -120,6 +120,15 @@ export class GhostFetch {
     };
   }
 
+  /** Get all non-banned proxy URLs, optionally filtered by country. */
+  getAvailableProxies(opts?: { country?: string }): string[] {
+    const proxies = this.proxyManager.getAvailableProxies();
+    if (!opts?.country) return proxies;
+    return proxies.filter(
+      (p) => this.proxyManager.getCountry(p) === opts.country!.toUpperCase(),
+    );
+  }
+
   // --- HTTP methods ---
 
   async get(url: string, options?: RequestOptions): Promise<GhostFetchResponse> {

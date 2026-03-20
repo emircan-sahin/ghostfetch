@@ -174,6 +174,18 @@ const client = new GhostFetch({
 // Or manual: await client.refreshProxies()
 ```
 
+### Get available proxies
+
+Retrieve all non-banned proxy URLs. Useful for sharing the proxy pool with other tools (e.g. Puppeteer) while respecting ghostfetch's ban state.
+
+```ts
+// All healthy proxies
+const proxies = client.getAvailableProxies();
+
+// Only US proxies
+const usProxies = client.getAvailableProxies({ country: 'US' });
+```
+
 ### Disable banning
 
 ```ts
