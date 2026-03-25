@@ -16,7 +16,7 @@ const DEFAULT_DELAYS = [1000, 2000, 4000];
 
 const DEFAULT_TIMEOUT = 30000;
 const HEALTH_BATCH_CONCURRENCY = 10;
-const HEALTH_RETRY_DELAYS = [0, 15000, 60000]; // immediate, +15s, +60s
+const HEALTH_RETRY_DELAYS = [0, 3000]; // immediate, +3s
 
 export class GhostFetch {
   private cycleTLS: CycleTLSClient | null = null;
