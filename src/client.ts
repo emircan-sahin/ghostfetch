@@ -424,7 +424,8 @@ export class GhostFetch {
       }
     }
 
-    const response = await client(url, cycleTLSOptions, method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options');
+    const methodFn = client[method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options'];
+    const response = await methodFn(url, cycleTLSOptions);
 
     const body = decodeResponseData(response.data);
 
