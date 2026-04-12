@@ -100,6 +100,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Returns 429 for first N hits, then 200
+  if (url === '/scoped-limit') {
+    const hits = endpointHits.get('/scoped-limit') ?? 0;
+    if (hits <= 3) {
+      res.writeHead(429);
+      res.end('rate limit');
+    } else {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    }
+    return;
+  }
+
   res.writeHead(404);
   res.end('not found');
 });
@@ -384,5 +397,92 @@ describe('retry with delays', () => {
     });
     expect(res.status).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ recovered: true });
+  });
+});
+
+describe('scopedBan', () => {
+  it('bans proxy only for matching scope, not other URLs', async () => {
+    const scopedClient = new GhostFetch({
+      retry: { delays: [10, 10, 10] },
+      ban: { maxFailures: 1, duration: 60000 },
+    });
+
+    // Add interceptor that returns scopedBan on 429
+    scopedClient.addInterceptor({
+      name: 'scoped-429',
+      match: (url) => url.includes('/scoped-limit') || url.includes('/rate-limit'),
+      check: (res) => res.status === 429 ? 'scopedBan' : null,
+    });
+
+    // This should fail — all retries hit 429 on /rate-limit
+    // After first 429, proxy is scoped-banned for localhost scope
+    // But since there's no other proxy, retries proceed without proxy
+    try {
+      await scopedClient.get(u('/rate-limit'));
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MaxRetriesExceededError);
+      const e = err as MaxRetriesExceededError;
+      expect(e.lastError.message).toContain('scopedBan');
+    }
+
+    // /ok on same host should still work (no proxy needed)
+    const okRes = await scopedClient.get(u('/ok'));
+    expect(okRes.status).toBe(200);
+
+    await scopedClient.destroy();
+  });
+
+  it('request-level interceptor can return scopedBan', async () => {
+    const scopedClient = new GhostFetch({
+      retry: { delays: [10] },
+      ban: { maxFailures: 1, duration: 60000 },
+    });
+
+    try {
+      await scopedClient.get(u('/rate-limit'), {
+        interceptor: { check: (r) => r.status === 429 ? 'scopedBan' : null },
+      });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MaxRetriesExceededError);
+      const e = err as MaxRetriesExceededError;
+      expect(e.lastError.message).toContain('scopedBan');
+    }
+
+    await scopedClient.destroy();
+  });
+
+  it('custom scopeKey extracts path-based scope', async () => {
+    const scopedClient = new GhostFetch({
+      retry: { delays: [10] },
+      ban: {
+        maxFailures: 1,
+        duration: 60000,
+        scopeKey: (url) => {
+          const u = new URL(url);
+          return `${u.hostname}:${u.pathname}`;
+        },
+      },
+    });
+
+    scopedClient.addInterceptor({
+      name: 'path-scoped',
+      match: () => true,
+      check: (res) => res.status === 429 ? 'scopedBan' : null,
+    });
+
+    try {
+      await scopedClient.get(u('/rate-limit'));
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(MaxRetriesExceededError);
+      const e = err as MaxRetriesExceededError;
+      expect(e.lastError.message).toContain('scopedBan');
+      // Scope should include path
+      expect(e.lastError.message).toContain('/rate-limit');
+    }
+
+    await scopedClient.destroy();
   });
 });

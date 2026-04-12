@@ -13,7 +13,7 @@ const DEDUP_WINDOW = 1000;
 /** How often to poll for an available proxy when waiting (ms). */
 const WAIT_POLL_INTERVAL = 2000;
 
-const DEFAULT_BAN: Required<BanConfig> = {
+const DEFAULT_BAN: Required<Omit<BanConfig, 'scopeKey'>> = {
   maxFailures: 3,
   duration: 60 * 60 * 1000, // 1 hour
 };
@@ -21,12 +21,14 @@ const DEFAULT_BAN: Required<BanConfig> = {
 export interface GetProxyOptions {
   exclude?: string | null;
   country?: string;
+  scope?: string;
 }
 
 export class ProxyManager {
   private proxies: string[] = [];
   private banMap = new Map<string, BanEntry>();
-  private banConfig: Required<BanConfig> | false;
+  private scopedBanMap = new Map<string, BanEntry>(); // "proxy::scope" → BanEntry
+  private banConfig: Required<Omit<BanConfig, 'scopeKey'>> | false;
   private countryMap = new Map<string, string>(); // proxy → country code
 
   constructor(proxies: string[], banConfig?: BanConfig | false) {
@@ -41,8 +43,8 @@ export class ProxyManager {
    */
   getProxy(opts?: GetProxyOptions | string | null): string | null {
     // Backwards compat: allow passing just exclude string
-    const { exclude, country } = typeof opts === 'string' || opts === null || opts === undefined
-      ? { exclude: opts ?? undefined, country: undefined }
+    const { exclude, country, scope } = typeof opts === 'string' || opts === null || opts === undefined
+      ? { exclude: opts ?? undefined, country: undefined, scope: undefined }
       : opts;
 
     let available = this.getAvailableProxies();
@@ -51,6 +53,11 @@ export class ProxyManager {
     if (country) {
       const upper = country.toUpperCase();
       available = available.filter((p) => this.countryMap.get(p) === upper);
+    }
+
+    // Filter out scoped-banned proxies
+    if (scope) {
+      available = available.filter((p) => !this.isScopedBanned(p, scope));
     }
 
     const candidates = exclude
@@ -167,10 +174,59 @@ export class ProxyManager {
     this.banMap.delete(proxy);
   }
 
+  /**
+   * Report a scoped proxy failure. Returns true if the proxy got scoped-banned.
+   * Proxy is banned only for the given scope (e.g. hostname), not globally.
+   */
+  reportScopedFailure(proxy: string, scope: string): boolean {
+    if (this.banConfig === false) return false;
+
+    const key = `${proxy}::${scope}`;
+    const now = Date.now();
+    const entry = this.scopedBanMap.get(key);
+
+    if (entry && (now - entry.lastFailure) < DEDUP_WINDOW) {
+      return entry.bannedAt > 0 && (now - entry.bannedAt) < this.banConfig.duration;
+    }
+
+    const failCount = (entry?.failCount ?? 0) + 1;
+
+    if (failCount >= this.banConfig.maxFailures) {
+      this.scopedBanMap.set(key, { bannedAt: now, failCount, lastFailure: now });
+      return true;
+    }
+
+    this.scopedBanMap.set(key, { bannedAt: 0, failCount, lastFailure: now });
+    return false;
+  }
+
+  /** Report a scoped proxy success — resets its scoped fail count. */
+  reportScopedSuccess(proxy: string, scope: string): void {
+    this.scopedBanMap.delete(`${proxy}::${scope}`);
+  }
+
+  /** Check if a proxy is scoped-banned for a given scope. */
+  private isScopedBanned(proxy: string, scope: string): boolean {
+    if (this.banConfig === false) return false;
+
+    const key = `${proxy}::${scope}`;
+    const entry = this.scopedBanMap.get(key);
+    if (!entry || !entry.bannedAt) return false;
+
+    const now = Date.now();
+    if (now - entry.bannedAt >= this.banConfig.duration) {
+      this.scopedBanMap.delete(key);
+      return false;
+    }
+
+    return true;
+  }
+
   /** Replace the proxy list and clear all bans + country data. */
   replaceProxies(proxies: string[]): void {
     this.proxies = [...proxies];
     this.banMap.clear();
+    this.scopedBanMap.clear();
     this.countryMap.clear();
   }
 

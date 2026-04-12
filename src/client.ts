@@ -157,6 +157,15 @@ export class GhostFetch {
 
   // --- Core request logic ---
 
+  /** Extract scope key from URL for scoped bans. */
+  private getScopeKey(url: string): string {
+    const banConfig = this.config.ban;
+    if (banConfig && typeof banConfig === 'object' && banConfig.scopeKey) {
+      return banConfig.scopeKey(url);
+    }
+    try { return new URL(url).hostname; } catch { return url; }
+  }
+
   async request(method: HttpMethod, url: string, options?: RequestOptions): Promise<GhostFetchResponse> {
     // Wait for health check to finish before first request
     await this.ready();
@@ -164,6 +173,7 @@ export class GhostFetch {
     const delays = options?.retry?.delays ?? this.retryDefaults.delays ?? DEFAULT_DELAYS;
     const maxAttempts = delays.length + 1; // first attempt + retries
     const forceProxy = options?.forceProxy ?? this.config.forceProxy ?? false;
+    const scope = this.getScopeKey(url);
     let lastError: GhostFetchRequestError | null = null;
     let lastFailedProxy: string | null | undefined = null;
 
@@ -173,8 +183,8 @@ export class GhostFetch {
         await sleep(delays[attempt - 1]);
       }
 
-      // Pick a proxy
-      const proxy: string | null = options?.proxy ?? await this.pickProxy(forceProxy, lastFailedProxy, options?.country);
+      // Pick a proxy (scope-aware: excludes scoped-banned proxies for this URL)
+      const proxy: string | null = options?.proxy ?? await this.pickProxy(forceProxy, lastFailedProxy, options?.country, scope);
 
       try {
         const response = await this.executeRequest(method, url, proxy, options);
@@ -183,7 +193,7 @@ export class GhostFetch {
         if (options?.interceptor) {
           const reqAction = options.interceptor.check(response);
           if (reqAction !== null) {
-            const result = this.handleInterceptorAction(reqAction, 'request', response, proxy);
+            const result = this.handleInterceptorAction(reqAction, 'request', response, proxy, scope);
             if (result === 'return') { return response; }
             lastError = result.error;
             lastFailedProxy = proxy;
@@ -201,7 +211,7 @@ export class GhostFetch {
             return response;
           }
 
-          const result = this.handleInterceptorAction(action, interceptor?.name ?? 'unnamed', response, proxy);
+          const result = this.handleInterceptorAction(action, interceptor?.name ?? 'unnamed', response, proxy, scope);
           if (result === 'return') { return response; }
           lastError = result.error;
           lastFailedProxy = proxy;
@@ -282,8 +292,9 @@ export class GhostFetch {
     forceProxy: boolean,
     exclude?: string | null,
     country?: string,
+    scope?: string,
   ): Promise<string | null> {
-    const opts = { exclude, country };
+    const opts = { exclude, country, scope };
     const proxy = this.proxyManager.getProxy(opts);
 
     if (proxy) return proxy;
@@ -309,12 +320,13 @@ export class GhostFetch {
     return null;
   }
 
-  /** Handle an interceptor action (retry/ban/skip). Returns 'return' to send response, or { error } to continue retry loop. */
+  /** Handle an interceptor action (retry/ban/scopedBan/skip). Returns 'return' to send response, or { error } to continue retry loop. */
   private handleInterceptorAction(
-    action: 'retry' | 'ban' | 'skip',
+    action: 'retry' | 'ban' | 'scopedBan' | 'skip',
     name: string,
     response: GhostFetchResponse,
     proxy: string | null,
+    scope?: string,
   ): 'return' | { error: GhostFetchRequestError } {
     if (action === 'skip') {
       if (proxy) this.proxyManager.reportSuccess(proxy);
@@ -327,6 +339,19 @@ export class GhostFetch {
         error: new GhostFetchRequestError({
           type: 'proxy',
           message: `Interceptor "${name}": ban (HTTP ${response.status})`,
+          status: response.status,
+          body: response.body,
+          proxy: proxy ?? undefined,
+        }),
+      };
+    }
+
+    if (action === 'scopedBan') {
+      if (proxy && scope) this.proxyManager.reportScopedFailure(proxy, scope);
+      return {
+        error: new GhostFetchRequestError({
+          type: 'proxy',
+          message: `Interceptor "${name}": scopedBan [${scope}] (HTTP ${response.status})`,
           status: response.status,
           body: response.body,
           proxy: proxy ?? undefined,

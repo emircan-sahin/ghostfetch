@@ -102,16 +102,33 @@ export interface BanConfig {
 
   /** Ban duration in ms (default: 3600000 = 1 hour) */
   duration?: number;
+
+  /**
+   * Extract a scope key from a URL for scoped bans.
+   * When set, 'scopedBan' interceptor action bans a proxy only for URLs
+   * that produce the same scope key.
+   *
+   * @default extracts hostname (e.g. 'web3.okx.com')
+   *
+   * @example
+   * // Ban per hostname (default)
+   * scopeKey: (url) => new URL(url).hostname
+   *
+   * // Ban per path prefix
+   * scopeKey: (url) => { const u = new URL(url); return `${u.hostname}${u.pathname.split('/').slice(0, 3).join('/')}`; }
+   */
+  scopeKey?: (url: string) => string;
 }
 
 /**
  * Interceptor action returned by check():
- * - 'retry' — retry with different proxy, current proxy is not penalized
- * - 'ban'   — retry with different proxy AND penalize current proxy (fail counter +1)
- * - 'skip'  — return response as-is, no retry, bypass all default handling
- * - null    — interceptor doesn't care, fall through to default behavior
+ * - 'retry'     — retry with different proxy, current proxy is not penalized
+ * - 'ban'       — retry with different proxy AND penalize current proxy (fail counter +1, global)
+ * - 'scopedBan' — retry with different proxy AND ban proxy for this URL scope only
+ * - 'skip'      — return response as-is, no retry, bypass all default handling
+ * - null        — interceptor doesn't care, fall through to default behavior
  */
-export type InterceptorAction = 'retry' | 'ban' | 'skip' | null;
+export type InterceptorAction = 'retry' | 'ban' | 'scopedBan' | 'skip' | null;
 
 export interface Interceptor {
   /** Name for debugging purposes */
@@ -124,10 +141,11 @@ export interface Interceptor {
    * Inspect the HTTP response and decide what to do.
    *
    * @returns
-   * - 'retry' — retry with different proxy (proxy is fine)
-   * - 'ban'   — retry + penalize this proxy
-   * - 'skip'  — return response directly, no retry, no default handling
-   * - null    — interceptor doesn't care, default behavior applies
+   * - 'retry'     — retry with different proxy (proxy is fine)
+   * - 'ban'       — retry + penalize this proxy (global ban)
+   * - 'scopedBan' — retry + ban this proxy for this URL scope only
+   * - 'skip'      — return response directly, no retry, no default handling
+   * - null        — interceptor doesn't care, default behavior applies
    */
   check: (response: GhostFetchResponse) => InterceptorAction;
 }
