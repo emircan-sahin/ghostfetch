@@ -39,6 +39,11 @@ export class ProxyManager {
   /**
    * Get a random non-banned proxy.
    * Supports exclude (skip last failed proxy) and country filter.
+   *
+   * When `exclude` is set, picks from a *different hostname* than the excluded
+   * proxy when possible (provider diversity on retry). Falls back to same-host
+   * pool if no other hostname is available.
+   *
    * Returns null if none available.
    */
   getProxy(opts?: GetProxyOptions | string | null): string | null {
@@ -65,8 +70,17 @@ export class ProxyManager {
       : available;
 
     // If excluding leaves nothing but there are available proxies, fall back
-    const pool = candidates.length > 0 ? candidates : available;
+    let pool = candidates.length > 0 ? candidates : available;
     if (pool.length === 0) return null;
+
+    // Provider diversity: prefer different hostname than the excluded proxy
+    if (exclude) {
+      const excludeHost = getHostname(exclude);
+      if (excludeHost) {
+        const differentHost = pool.filter((p) => getHostname(p) !== excludeHost);
+        if (differentHost.length > 0) pool = differentHost;
+      }
+    }
 
     return pool[Math.floor(Math.random() * pool.length)];
   }
@@ -259,5 +273,14 @@ export class ProxyManager {
   /** Get banned proxy count. */
   get banned(): number {
     return this.total - this.available;
+  }
+}
+
+/** Extract hostname from a proxy URL. Returns null on parse failure. */
+function getHostname(proxyUrl: string): string | null {
+  try {
+    return new URL(proxyUrl).hostname;
+  } catch {
+    return null;
   }
 }
