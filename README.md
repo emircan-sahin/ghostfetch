@@ -7,7 +7,7 @@ Built for backend developers who need to fetch data from sites that aggressively
 ## Features
 
 - **CycleTLS** — TLS fingerprint spoofing (JA3, JA4R, HTTP/2, QUIC)
-- **Proxy rotation** — random proxy selection with health check, banning, and country filtering
+- **Proxy rotation** — random proxy selection with health check, banning, country filtering, and automatic provider diversification on retry
 - **Smart retry** — auto-retry on 429/503, custom interceptors for per-site logic
 - **Cloudflare detection** — JS challenge detection with descriptive errors
 - **Protocol control** — force HTTP/1.1 or HTTP/3, disable redirects, header ordering
@@ -185,6 +185,26 @@ const proxies = client.getAvailableProxies();
 // Only US proxies
 const usProxies = client.getAvailableProxies({ country: 'US' });
 ```
+
+### Provider diversification on retry
+
+When a request fails and ghostfetch retries, it automatically picks a proxy with a **different hostname** than the one that just failed. This rotates across providers so a burned IP pool doesn't get hit twice in a row.
+
+```ts
+const client = new GhostFetch({
+  proxies: [
+    'http://user:pass@pr.oxylabs.io:8001',
+    'http://user:pass@pr.oxylabs.io:8002',
+    'http://user:pass@gate.decodo.com:8001',
+    'http://user:pass@gate.decodo.com:8002',
+  ],
+});
+
+// If oxylabs fails, retry lands on decodo. If decodo fails, retry lands on oxylabs.
+// Grouping is auto-detected from the proxy URL hostname — no labels needed.
+```
+
+Falls back to same-hostname selection when no alternative provider is available (e.g. single-provider setup, or all alternatives banned).
 
 ### Disable banning
 
