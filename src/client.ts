@@ -450,7 +450,7 @@ export class GhostFetch {
     }
 
     const methodFn = client[method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options'];
-    const response = await methodFn(url, cycleTLSOptions);
+    const response = await withTimeout(methodFn(url, cycleTLSOptions), timeout);
 
     const body = decodeResponseData(response.data);
 
@@ -552,6 +552,20 @@ export class GhostFetch {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Enforce a JS-level timeout on any Promise. CycleTLS passes timeout to Go but doesn't enforce it client-side. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Request timeout after ${ms}ms`));
+    }, ms);
+
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
 }
 
 /** Decode CycleTLS v2 response data — v2 returns native Buffer objects. */

@@ -100,6 +100,11 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Never responds — used for timeout testing
+  if (url === '/hang') {
+    return;
+  }
+
   // Returns 429 for first N hits, then 200
   if (url === '/scoped-limit') {
     const hits = endpointHits.get('/scoped-limit') ?? 0;
@@ -484,5 +489,44 @@ describe('scopedBan', () => {
     }
 
     await scopedClient.destroy();
+  });
+});
+
+describe('timeout enforcement', () => {
+  it('5s timeout aborts hanging request before server responds', async () => {
+    const start = Date.now();
+    try {
+      await client.get(u('/hang'), { timeout: 5000 });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(8000); // should not take much longer than 5s
+      expect(elapsed).toBeGreaterThanOrEqual(4500); // should be close to 5s
+      const lastError = (err as MaxRetriesExceededError).lastError;
+      expect(lastError.message).toContain('timeout');
+    }
+  });
+
+  it('0.01s timeout kills request immediately', async () => {
+    const start = Date.now();
+    try {
+      await client.get(u('/hang'), { timeout: 10 });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(2000); // should be near-instant
+      const lastError = (err as MaxRetriesExceededError).lastError;
+      expect(lastError.message).toContain('timeout');
+    }
+  });
+
+  it('timeout error is classified as ambiguous (proxy not penalized)', async () => {
+    try {
+      await client.get(u('/hang'), { timeout: 10 });
+      expect.unreachable('should have thrown');
+    } catch (err) {
+      const lastError = (err as MaxRetriesExceededError).lastError;
+      expect(lastError.type).toBe('ambiguous');
+    }
   });
 });
