@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.1
+
+### Fixed
+
+- **A stalled health check could hang the client permanently.** The probe passed its
+  timeout to CycleTLS but did not enforce one in JS, so a target that accepted the
+  connection and never answered left `ready()` unsettled. Because `request()` awaits
+  `ready()`, that took every request on the client with it, not just startup. The probe is
+  now wrapped in the same `withTimeout` that requests use, and the whole sweep has a
+  ceiling derived from the pool size; on breach it resolves with an empty result rather
+  than rejecting, since rejecting would break every request instead.
+  Reported against a 20-proxy pool, reproduced locally against an unresponsive endpoint.
+
+### Docs
+
+- Lifecycle: note that a short-lived process should follow `destroy()` with
+  `process.exit()`, and how to tell subprocess pipes from handles of your own.
+
 ## 0.5.0
 
 ### Breaking
