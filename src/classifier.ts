@@ -1,4 +1,5 @@
 import { ErrorType, GhostFetchResponse, Interceptor, InterceptorAction } from './types';
+import { InterceptorError } from './errors';
 
 /** Error codes that are definitely proxy/network failures — request never reached the server. */
 const PROXY_ERROR_CODES = new Set([
@@ -37,7 +38,11 @@ const CF_CHALLENGE_PATTERNS = [
   'Checking your browser',
   'Just a moment...',
   '_cf_chl_tk',
+  '/cdn-cgi/challenge-platform/',
 ];
+
+/** Statuses Cloudflare serves interstitials on. */
+const CF_CHALLENGE_STATUSES = new Set([403, 503]);
 
 /**
  * Default status codes that should trigger retry.
@@ -93,12 +98,21 @@ export function classifyError(error: unknown): ErrorType {
 }
 
 /**
- * Check if a successful response is actually a Cloudflare JS challenge.
+ * Check if a response is actually a Cloudflare challenge rather than real content.
+ *
+ * Cloudflare states this outright in `cf-mitigated` when it acts, which is both
+ * cheaper and more reliable than sniffing markup — so that is checked first, at any
+ * status. Body sniffing is the fallback and stays limited to the interstitial statuses.
  */
 export function isCloudflareChallenge(response: GhostFetchResponse): boolean {
-  if (response.status === 403 || response.status === 503) {
+  if (response.headers['cf-mitigated']?.toLowerCase().includes('challenge')) {
+    return true;
+  }
+
+  if (CF_CHALLENGE_STATUSES.has(response.status)) {
     return CF_CHALLENGE_PATTERNS.some((pattern) => response.body.includes(pattern));
   }
+
   return false;
 }
 
@@ -126,11 +140,30 @@ export function checkInterceptors(
   for (const interceptor of interceptors) {
     if (!interceptor.match(url)) continue;
 
-    const action = interceptor.check(response);
+    const action = runCheck(interceptor.check, interceptor.name ?? 'unnamed', response);
     return { matched: true, action, interceptor };
   }
 
   return { matched: false, action: null };
+}
+
+/**
+ * Call an interceptor's `check()`, tagging anything it throws.
+ *
+ * Without this the exception reaches the retry loop's generic handler, gets
+ * classified as a server error, and is retried — so a plain coding mistake in an
+ * interceptor surfaces as a network failure several seconds later.
+ */
+export function runCheck(
+  check: (response: GhostFetchResponse) => InterceptorAction,
+  name: string,
+  response: GhostFetchResponse,
+): InterceptorAction {
+  try {
+    return check(response);
+  } catch (err) {
+    throw new InterceptorError(name, err);
+  }
 }
 
 /**

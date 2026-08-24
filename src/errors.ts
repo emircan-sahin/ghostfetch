@@ -47,3 +47,23 @@ export class MaxRetriesExceededError extends Error {
     this.attempts = attempts;
   }
 }
+
+/**
+ * An interceptor's `check()` threw.
+ *
+ * That is a bug in the caller's code, not a flaky response, so it is surfaced as-is
+ * instead of being classified as a server error and quietly retried — otherwise a
+ * typo in an interceptor reads as "max retries exceeded" three attempts later.
+ */
+export class InterceptorError extends Error {
+  readonly interceptor: string;
+  readonly cause: unknown;
+
+  constructor(interceptor: string, cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(`Interceptor "${interceptor}" threw: ${detail}`);
+    this.name = 'InterceptorError';
+    this.interceptor = interceptor;
+    this.cause = cause;
+  }
+}

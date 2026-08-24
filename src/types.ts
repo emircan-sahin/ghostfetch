@@ -1,3 +1,5 @@
+import type { BrowserPreset } from './presets';
+
 export interface Cookie {
   name: string;
   value: string;
@@ -15,6 +17,20 @@ export interface GhostFetchConfig {
   /** List of proxy URLs in format http://user:pass@host:port */
   proxies?: string[];
 
+  /**
+   * Adopt a browser's identity in one line — TLS fingerprint, HTTP/2 settings,
+   * User-Agent, header order and the matching default headers, all consistent
+   * with each other.
+   *
+   * Anything you set explicitly (`ja3`, `userAgent`, `headers`, …) overrides the
+   * preset, so you can start from a browser and tweak one field. Presets are
+   * snapshots of a real browser build; for sites that fingerprint aggressively,
+   * take your own values from https://tls.peet.ws/api/all.
+   *
+   * @example browser: 'chrome'
+   */
+  browser?: BrowserPreset;
+
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
 
@@ -23,6 +39,13 @@ export interface GhostFetchConfig {
 
   /** Proxy ban configuration. Set to false to disable banning entirely. */
   ban?: BanConfig | false;
+
+  /**
+   * Startup health check for the proxy list. Set to `false` to skip it and trust
+   * every proxy as-is — faster to start, but dead proxies stay in the pool and no
+   * country data is resolved (so `country` filtering will not work).
+   */
+  healthCheck?: false | HealthCheckConfig;
 
   /**
    * If true, requests will wait until a proxy becomes available when all are
@@ -84,16 +107,75 @@ export interface GhostFetchConfig {
 
   /** Default cookies for all requests */
   cookies?: Cookie[] | Record<string, string>;
+
+  /**
+   * Close the CycleTLS transport after this many ms with no in-flight request.
+   * `0` (the default) keeps it open until you call `destroy()`.
+   *
+   * CycleTLS runs a Go subprocess and holds a socket open to it, so **a script that
+   * never calls `destroy()` will not exit.** Long-lived servers want the default —
+   * the transport is ~25MB that stays flat, and no request ever pays the ~110ms to
+   * reopen it. Scripts, tests and cron jobs should call `destroy()` when done; set
+   * this instead when threading `destroy()` through is awkward.
+   *
+   * @example idleTimeout: 5000  // a script that shuts itself down 5s after the last request
+   */
+  idleTimeout?: number;
+
+  /**
+   * Refuse a response that decompresses to more than this many bytes
+   * (default: 100MB). A small gzip can expand to gigabytes, so this is what stops
+   * a hostile server from exhausting memory. The request fails instead.
+   */
+  maxDecompressedSize?: number;
+
+  /**
+   * What to do when a Cloudflare JS challenge is detected.
+   *
+   * - `'throw'` (default) — fail immediately with CloudflareJSChallengeError
+   * - `'retry'` — treat it as a retryable block and rotate to another proxy;
+   *   throws CloudflareJSChallengeError only after the retries run out
+   */
+  cloudflare?: 'throw' | 'retry';
 }
 
 export interface RetryConfig {
   /**
    * Delay before each retry in ms. Array length = number of retries.
+   * Takes precedence over `attempts`.
    *
    * @example [5000, 15000, 30000] → 3 retries: wait 5s, 15s, 30s
    * @default [1000, 2000, 4000]
    */
   delays?: number[];
+
+  /**
+   * Shorthand for an exponential schedule instead of listing `delays`:
+   * `attempts` retries at 1s, 2s, 4s, 8s… capped by `maxDelay`.
+   * Ignored when `delays` is set.
+   *
+   * @example { attempts: 5 } → [1000, 2000, 4000, 8000, 16000]
+   */
+  attempts?: number;
+
+  /** Upper bound for delays generated from `attempts` (default: 30000) */
+  maxDelay?: number;
+
+  /**
+   * Randomize each delay by ±this fraction (0–1) so parallel requests do not
+   * retry in lockstep. Defaults to 0.2 for `attempts` schedules and 0 for
+   * explicit `delays`. Never applied to a server-provided `Retry-After`.
+   */
+  jitter?: number;
+
+  /**
+   * Honor a `Retry-After` response header instead of the configured delay
+   * (default: true). Applies to any retried response that carries the header.
+   */
+  respectRetryAfter?: boolean;
+
+  /** Longest wait honored from `Retry-After`, in ms (default: 60000) */
+  maxRetryAfter?: number;
 }
 
 export interface BanConfig {
@@ -164,10 +246,16 @@ export interface GhostFetchResponse {
   /** HTTP status code */
   status: number;
 
-  /** Response headers */
+  /** Response headers — names are lower-cased. `set-cookie` is not included here. */
   headers: Record<string, string>;
 
-  /** Response body as string */
+  /** Raw `set-cookie` header values, one entry per cookie (empty when none were sent). */
+  setCookie: string[];
+
+  /**
+   * Response body decoded as UTF-8. Decoded lazily and cached, so requesting a
+   * binary payload and only reading `buffer()` costs nothing extra.
+   */
   body: string;
 
   /** Final URL (after redirects) */
@@ -175,6 +263,12 @@ export interface GhostFetchResponse {
 
   /** Parse body as JSON */
   json: <T = unknown>() => T;
+
+  /** Raw response bytes — use this for images, PDFs, archives, any binary payload. */
+  buffer: () => Buffer;
+
+  /** Raw response bytes as an ArrayBuffer. */
+  arrayBuffer: () => ArrayBuffer;
 }
 
 export interface GhostFetchError {
@@ -256,6 +350,19 @@ export interface RequestOptions {
   cookies?: Cookie[] | Record<string, string>;
 }
 
+export interface HealthCheckConfig {
+  /**
+   * URL each proxy is asked to fetch. The response is parsed as JSON and its
+   * `country` field, when present, becomes the proxy's country.
+   *
+   * @default 'https://ipinfo.io/json'
+   */
+  url?: string;
+
+  /** Per-attempt timeout in ms (default: 10000) */
+  timeout?: number;
+}
+
 export interface HealthCheckResult {
   /** Total proxies that were tested */
   total: number;
@@ -272,5 +379,7 @@ export interface HealthCheckResult {
   /** Per-proxy detail: proxy → country or null if no country resolved */
   proxies: Record<string, string | null>;
 }
+
+export type { BrowserPreset };
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';

@@ -13,6 +13,9 @@ const DEDUP_WINDOW = 1000;
 /** How often to poll for an available proxy when waiting (ms). */
 const WAIT_POLL_INTERVAL = 2000;
 
+/** Floor for the poll interval so a very short wait still gets checked. */
+const MIN_POLL_INTERVAL = 25;
+
 const DEFAULT_BAN: Required<Omit<BanConfig, 'scopeKey'>> = {
   maxFailures: 3,
   duration: 60 * 60 * 1000, // 1 hour
@@ -86,6 +89,19 @@ export class ProxyManager {
   }
 
   /**
+   * Is this proxy usable right now — still in the pool, not banned, and matching
+   * the country/scope filters? Used by sessions to decide whether to keep their
+   * pinned exit IP or pick a new one.
+   */
+  isUsable(proxy: string, opts?: GetProxyOptions): boolean {
+    if (!this.proxies.includes(proxy)) return false;
+    if (!this.getAvailableProxies().includes(proxy)) return false;
+    if (opts?.country && this.countryMap.get(proxy) !== opts.country.toUpperCase()) return false;
+    if (opts?.scope && this.isScopedBanned(proxy, opts.scope)) return false;
+    return true;
+  }
+
+  /**
    * Wait until a proxy becomes available (bans expire or list is refreshed).
    * Resolves with the proxy string. Supports country filter.
    *
@@ -99,10 +115,18 @@ export class ProxyManager {
     // Calculate max wait from earliest ban expiry + buffer
     const maxWait = this.getEarliestBanExpiry() ?? 5 * 60 * 1000;
 
+    // Poll several times within the window. A fixed 2s interval would never fire at
+    // all when a short ban puts maxWait below it, and the wait would time out even
+    // though the proxy had come back.
+    const pollInterval = Math.max(MIN_POLL_INTERVAL, Math.min(WAIT_POLL_INTERVAL, Math.floor(maxWait / 4)));
+
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         clearInterval(interval);
-        reject(new NoProxyAvailableError());
+        // One last look — a ban may have lapsed between the final poll and now
+        const proxy = this.getProxy(opts);
+        if (proxy) resolve(proxy);
+        else reject(new NoProxyAvailableError());
       }, maxWait);
 
       const interval = setInterval(() => {
@@ -112,7 +136,11 @@ export class ProxyManager {
           clearInterval(interval);
           resolve(proxy);
         }
-      }, WAIT_POLL_INTERVAL);
+      }, pollInterval);
+
+      // Waiting for a proxy must not keep the Node process alive on its own
+      timeout.unref?.();
+      interval.unref?.();
     });
   }
 
