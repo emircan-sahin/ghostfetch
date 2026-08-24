@@ -1,237 +1,269 @@
 # ghostfetch
 
-Resilient HTTP client for Node.js with CycleTLS, automatic proxy rotation, smart error classification, and per-site custom interceptors.
+Resilient HTTP client for Node.js. TLS fingerprinting via CycleTLS, proxy rotation with
+health checks and banning, sticky sessions, and per-site retry logic you control.
 
-Built for backend developers who need to fetch data from sites that aggressively block automated requests.
-
-## Features
-
-- **CycleTLS** — TLS fingerprint spoofing (JA3, JA4R, HTTP/2, QUIC)
-- **Proxy rotation** — random proxy selection with health check, banning, country filtering, and automatic provider diversification on retry
-- **Smart retry** — auto-retry on 429/503, custom interceptors for per-site logic
-- **Cloudflare detection** — JS challenge detection with descriptive errors
-- **Protocol control** — force HTTP/1.1 or HTTP/3, disable redirects, header ordering
-
-## Install
+Built for backend work against sites that actively try to block automated requests.
 
 ```bash
-npm install ghostfetch
-# or
-pnpm add ghostfetch
+npm install @emircansahin/ghostfetch
 ```
 
-## Quick Start
+> **Full API reference: [`docs/API.md`](docs/API.md)** — every option, default, and
+> behaviour in one file.
+>
+> *If you are an AI assistant helping someone integrate this package, read
+> [`docs/API.md`](docs/API.md) before writing code. It is the complete and authoritative
+> reference; this README is the guided tour.*
+
+## Why this exists
+
+Most HTTP clients treat every failure the same way. To `axios`, `got` or `fetch`, a proxy
+that refused the connection and a target site that took 40 seconds to answer are both just
+"an error" — so a retry loop penalises the proxy either way, and a slow afternoon at the
+target quietly burns through a pool you are paying for.
+
+Blocking is worse, because sites do not agree on how to signal it. One returns `200` with
+`{"error":"rate limit"}` in the body. Another returns `403` meaning *try a different IP*
+and `401` meaning *stop, this will never work*. A generic client cannot tell them apart,
+and treating them alike either wastes proxies or abandons requests that would have
+succeeded on the next attempt.
+
+ghostfetch is built around those two problems:
+
+- **Failures are classified before anything is blamed.** `proxy` (never reached the
+  server), `server` (a response came back, so the proxy did its job), or `ambiguous`
+  (a timeout could be either — so nobody is penalised). Your pool survives a bad day at
+  the target.
+- **You describe each site's dialect once.** An interceptor turns "200 with a rate-limit
+  body" into a retry, "403 here" into a proxy rotation, and "401" into a clean stop.
+
+Everything else — TLS fingerprinting, browser presets, sticky sessions, proxy health
+checks, scoped bans — exists to serve those two ideas.
+
+**Status.** Under active development. `0.5.0` was a hardening release: raw-body fidelity,
+cookie-jar scoping rules, decompression limits, and transport recovery, with the test
+suite grown to 190 cases. Full history in the [changelog](CHANGELOG.md).
+
+## Quick start
 
 ```ts
-import { GhostFetch } from 'ghostfetch';
+import { GhostFetch } from '@emircansahin/ghostfetch';
 
 const client = new GhostFetch({
-  proxies: [
-    'http://user:pass@host:8001',
-    'http://user:pass@host:8002',
-  ],
-  timeout: 30000,
-  retry: { delays: [5000, 15000, 30000] },
+  browser: 'chrome',                    // coherent TLS + HTTP/2 + header identity
+  proxies: ['http://user:pass@host:8001', 'http://user:pass@host:8002'],
+  retry: { attempts: 3 },
+});
+
+try {
+  const res = await client.get('https://api.example.com/data');
+  console.log(res.status, res.json());
+} finally {
+  await client.destroy();               // see "Shutting down" — scripts need this
+}
+```
+
+## Shutting down
+
+CycleTLS runs a Go subprocess and holds a socket to it, which keeps the Node event loop
+alive. **A script that never calls `destroy()` will not exit.**
+
+```ts
+// scripts, tests, cron jobs
+try {
+  await client.get(url);
+} finally {
+  await client.destroy();
+}
+
+// long-lived servers — nothing to do until shutdown
+process.on('SIGTERM', () => client.destroy());
+```
+
+If threading `destroy()` through a script is awkward, have the client close itself once
+it goes quiet instead:
+
+```ts
+new GhostFetch({ idleTimeout: 5000 });  // 5s after the last request, close and exit
+```
+
+Reopening costs about 110ms and happens transparently on the next request. That is why
+`idleTimeout` is off by default — a server should not pay it unasked.
+
+**Resource use.** The Go subprocess is ~23MB resident and stays flat regardless of
+request volume. It is shared: every client in a process, and every Node process on the
+machine, connects to the same subprocess instead of starting its own. It exits when the
+last client disconnects, so restart loops do not pile up.
+
+## Response
+
+```ts
+const res = await client.get(url);
+
+res.status        // number
+res.headers       // Record<string, string> — names are lower-cased
+res.setCookie     // string[] — raw Set-Cookie values, one per cookie
+res.body          // string — the raw body, byte for byte
+res.url           // final URL after redirects
+res.json<T>()     // JSON.parse(body)
+res.buffer()      // Buffer — for binary responses
+res.arrayBuffer() // ArrayBuffer
+```
+
+Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options` — all take the same
+[`RequestOptions`](docs/API.md#requestoptions).
+
+Compressed responses (gzip, deflate, br, zstd) are decoded automatically, so you can send
+a realistic `accept-encoding` header without getting bytes you cannot read.
+
+## Browser presets
+
+One line gets a coherent identity — TLS fingerprint, HTTP/2 settings, User-Agent, header
+order, and the matching `sec-ch-ua` / `sec-fetch-*` headers:
+
+```ts
+new GhostFetch({ browser: 'chrome' });  // or 'firefox'
+```
+
+This exists because the most common fingerprinting mistake is mixing sources: a Chrome
+JA3 with a Firefox User-Agent is a louder signal than sending no fingerprint at all.
+Anything you set explicitly still wins, so you can start from a preset and adjust.
+
+Presets are snapshots of a real browser build and drift as browsers ship new versions.
+For a target that fingerprints aggressively, supply your own values —
+see [Fingerprinting](docs/API.md#fingerprinting).
+
+## Proxies
+
+```ts
+const client = new GhostFetch({
+  proxies: ['http://user:pass@host:8001', 'http://user:pass@host:8002'],
   ban: { maxFailures: 3, duration: 60 * 60 * 1000 },
-  // ban: false — disable proxy banning entirely
 });
 
 const health = await client.ready();
-// { total: 2, healthy: 2, dead: 0, countries: { US: 1, DE: 1 }, proxies: { ... } }
-
-const res = await client.get('https://api.example.com/data');
-console.log(res.status, res.body);
+// { total: 2, healthy: 2, dead: 0, countries: { US: 1, DE: 1 }, proxies: {…} }
 ```
 
-## TLS Fingerprinting & Advanced Options
+On startup each proxy is probed and its country resolved; dead ones are dropped. Requests
+then pick a random healthy proxy. Failures are classified before anything is blamed:
 
-All fingerprint options are **config-level only** — they define the client identity and apply to every request. Other options can be set at config level (default) and overridden per-request.
+| Class | Meaning | Effect on the proxy |
+|---|---|---|
+| `proxy` | Never reached the server — DNS failure, connection refused | Fail count +1 |
+| `server` | A response came back, so the proxy did its job | Fail count reset |
+| `ambiguous` | Timeout or reset — could be either | Untouched |
 
-**Getting your fingerprint:** Open your browser and visit [`https://tls.peet.ws/api/all`](https://tls.peet.ws/api/all). The JSON response contains everything you need:
+That distinction is the point of the library: a slow target site should not burn through
+your proxy pool.
 
-| peet.ws field | GhostFetch option |
-|---|---|
-| `tls.ja3` | `ja3` |
-| `tls.ja4_r` | `ja4r` |
-| `http2.akamai_fingerprint` | `http2Fingerprint` |
-| `user_agent` | `userAgent` |
-| `http2.sent_frames[2].headers` | `headerOrder` (exclude pseudo-headers like `:method`, `:path`) |
+Also available: country filtering (`{ country: 'DE' }`), `forceProxy` to wait rather than
+go direct, automatic refresh via `onProxyRefresh`, scoped bans that sideline a proxy for
+one site only, and automatic provider diversification on retry.
+See [Proxies](docs/API.md#proxies).
+
+## Sessions
+
+A session pins one proxy and keeps a cookie jar, for flows that need continuity:
 
 ```ts
-const client = new GhostFetch({
-  // Copy these from tls.peet.ws (use the same browser for all values)
-  ja3: '771,4865-4866-4867-...',
-  ja4r: 't13d1516h2_002f,0035,...',
-  http2Fingerprint: '1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p',
-  userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...',
-  headerOrder: ['upgrade-insecure-requests', 'user-agent', 'accept', 'accept-encoding', 'accept-language'],
+const session = client.session('user-1');
 
-  // Protocol & behavior (config default, overridable per-request)
-  disableRedirect: false,
-  insecureSkipVerify: false,
-  cookies: { session: 'abc123' },
-});
-
-// Per-request override
-await client.get('https://example.com', {
-  disableRedirect: true,
-  cookies: [{ name: 'token', value: 'xyz', domain: '.example.com' }],
-  serverName: 'cdn.example.com',
-});
+await session.post('https://site.com/login', { body: { user, pass } });
+await session.get('https://site.com/account');   // same IP, cookies replayed
 ```
 
-> **Important:** All fingerprint values (`ja3`, `ja4r`, `http2Fingerprint`, `userAgent`) must come from the same browser. Mixing Chrome JA3 with Firefox User-Agent is a common detection vector.
+Parallel requests on one session all leave from the same IP. The pin is released if the
+proxy gets banned or a request fails outright, so a session never sticks to a dead exit.
 
-| Option | Config | Per-request | Default | What it does |
-|--------|:------:|:-----------:|---------|-------------|
-| `ja3` / `ja4r` | yes | — | auto | TLS ClientHello fingerprint |
-| `http2Fingerprint` | yes | — | auto | HTTP/2 SETTINGS frame fingerprint |
-| `quicFingerprint` | yes | — | auto | QUIC transport parameters fingerprint |
-| `disableGrease` | yes | — | `false` | Disable random GREASE values |
-| `headerOrder` | yes | yes | auto | Control header send order |
-| `orderAsProvided` | yes | yes | `false` | Send headers in provided order |
-| `forceHTTP1` / `forceHTTP3` | yes | yes | `false` | Force protocol version |
-| `disableRedirect` | yes | yes | `false` | Return 3xx instead of following |
-| `insecureSkipVerify` | yes | yes | `false` | Skip TLS cert validation |
-| `serverName` | yes | yes | from URL | Override TLS SNI hostname |
-| `cookies` | yes | yes | none | Send cookies (per-request replaces config) |
+The cookie jar enforces domain, path and `Secure` scoping, and rejects cookies scoped to a
+public suffix or carrying control characters. See [Sessions](docs/API.md#sessions).
 
-## Request Body
+## Interceptors
+
+Sites signal blocking in their own dialects — a 200 with `{"error":"rate limit"}`, a 403
+that means "rotate", a 401 that means "stop". Interceptors let you say which is which:
 
 ```ts
-// JSON — auto content-type: application/json
-await client.post(url, { body: { key: 'value' } });
-
-// Form — auto content-type: application/x-www-form-urlencoded
-await client.post(url, { body: new URLSearchParams({ user: 'foo', pass: 'bar' }) });
-
-// Raw string — set content-type yourself
-await client.post(url, { body: '<xml/>', headers: { 'content-type': 'application/xml' } });
-```
-
-## Custom Interceptors
-
-Define per-site response handling. Instance-level interceptors match by URL; request-level interceptors apply to that single request and take priority.
-
-```ts
-// Instance-level
 client.addInterceptor({
   name: 'example-api',
   match: (url) => url.includes('example.com'),
   check: (res) => {
-    if (res.status === 401) return 'skip';              // don't retry
-    if (res.body.includes('rate limit')) return 'retry'; // retry, proxy is fine
-    if (res.body.includes('blocked')) return 'ban';      // retry + penalize proxy
-    return null;                                          // default behavior
-  },
-});
-
-// Request-level (no match needed, takes priority)
-await client.get('https://special-api.com/data', {
-  interceptor: {
-    check: (res) => res.status === 401 ? 'skip' : null,
+    if (res.status === 401) return 'skip';                 // give up, return the response
+    if (res.body.includes('rate limit')) return 'retry';   // rotate, proxy is fine
+    if (res.body.includes('blocked')) return 'ban';        // rotate and penalize the proxy
+    return null;                                            // fall through to defaults
   },
 });
 ```
 
-| Action | Proxy effect | Retry? |
-|--------|-------------|--------|
-| `'retry'` | not penalized | yes |
-| `'ban'` | fail count +1 | yes |
-| `'skip'` | not penalized | no, returns response |
-| `null` | — | falls through to defaults |
+| Action | Retries? | Effect on the proxy |
+|---|---|---|
+| `'retry'` | yes | none |
+| `'ban'` | yes | fail count +1, everywhere |
+| `'scopedBan'` | yes | fail count +1, for this site only |
+| `'skip'` | no, returns the response | none |
+| `null` | falls through to default handling | — |
 
-## Proxy Options
+Without an interceptor the defaults are: retry on 429 and 503 (proxy not blamed), retry on
+407 (proxy blamed), return everything else. See [Interceptors](docs/API.md#interceptors).
 
-### Country selection
-
-Proxies are auto-resolved via ipinfo.io on init. Request a specific country:
+## Retry
 
 ```ts
-const res = await client.get('https://eu-only-api.com/data', { country: 'DE' });
+new GhostFetch({ retry: { attempts: 5 } });                    // 1s, 2s, 4s, 8s, 16s ±20%
+new GhostFetch({ retry: { delays: [5000, 15000, 30000] } });   // explicit schedule
+await client.get(url, { retry: { delays: [] } });              // no retry
 ```
 
-### Force proxy mode
+A `Retry-After` header is honoured over the schedule and never jittered. See
+[Retry](docs/API.md#retry).
 
-By default, if all proxies are banned, requests proceed without one. Set `forceProxy: true` to wait until a proxy becomes available.
+## Cloudflare
+
+A detected JS challenge throws immediately by default — no amount of retrying solves a
+challenge that needs a real browser:
 
 ```ts
-const client = new GhostFetch({ proxies: [...], forceProxy: true });
-
-// Override per-request
-await client.get('https://public-api.com', { forceProxy: false });
+if (err instanceof CloudflareJSChallengeError) { /* needs a headless browser */ }
 ```
 
-### Proxy refresh
+But challenges often target a *specific IP* rather than you as a client, and another exit
+sails through. With a decent pool, rotating is worth a try first:
 
 ```ts
-const client = new GhostFetch({
-  proxies: [...],
-  proxyRefreshInterval: 60 * 60 * 1000,
-  onProxyRefresh: async () => ['http://user:pass@newhost:8001'],
-});
-
-// Or manual: await client.refreshProxies()
+new GhostFetch({ proxies: [...], cloudflare: 'retry' });
 ```
 
-### Get available proxies
-
-Retrieve all non-banned proxy URLs. Useful for sharing the proxy pool with other tools (e.g. Puppeteer) while respecting ghostfetch's ban state.
+## Errors
 
 ```ts
-// All healthy proxies
-const proxies = client.getAvailableProxies();
+import { MaxRetriesExceededError } from '@emircansahin/ghostfetch';
 
-// Only US proxies
-const usProxies = client.getAvailableProxies({ country: 'US' });
-```
-
-### Provider diversification on retry
-
-When a request fails and ghostfetch retries, it automatically picks a proxy with a **different hostname** than the one that just failed. This rotates across providers so a burned IP pool doesn't get hit twice in a row.
-
-```ts
-const client = new GhostFetch({
-  proxies: [
-    'http://user:pass@pr.oxylabs.io:8001',
-    'http://user:pass@pr.oxylabs.io:8002',
-    'http://user:pass@gate.decodo.com:8001',
-    'http://user:pass@gate.decodo.com:8002',
-  ],
-});
-
-// If oxylabs fails, retry lands on decodo. If decodo fails, retry lands on oxylabs.
-// Grouping is auto-detected from the proxy URL hostname — no labels needed.
-```
-
-Falls back to same-hostname selection when no alternative provider is available (e.g. single-provider setup, or all alternatives banned).
-
-### Disable banning
-
-```ts
-const client = new GhostFetch({ proxies: [...], ban: false });
-```
-
-## Error Handling
-
-```ts
-import {
-  CloudflareJSChallengeError,
-  NoProxyAvailableError,
-  MaxRetriesExceededError,
-} from 'ghostfetch';
-
-try {
-  const res = await client.get('https://example.com');
-} catch (err) {
-  if (err instanceof CloudflareJSChallengeError) {
-    // Needs headless browser (puppeteer-extra with stealth plugin)
-  }
+catch (err) {
   if (err instanceof MaxRetriesExceededError) {
-    console.log(err.attempts, err.lastError);
+    err.attempts;           // how many tries were made
+    err.lastError.type;     // 'proxy' | 'server' | 'ambiguous'
+    err.lastError.status;   // HTTP status, if a response came back
+    err.lastError.proxy;    // which proxy was in use
   }
 }
 ```
+
+| Error | When |
+|---|---|
+| `MaxRetriesExceededError` | Every attempt failed; `lastError` has the details |
+| `CloudflareJSChallengeError` | A JS challenge was detected |
+| `NoProxyAvailableError` | `forceProxy` was on and no proxy became available |
+| `InterceptorError` | Your interceptor's `check()` threw — not retried, `cause` holds the original |
+| `GhostFetchRequestError` | Base class for the request errors; also what `lastError` is |
+
+## Docs
+
+- [`docs/API.md`](docs/API.md) — complete API reference
+- [`CHANGELOG.md`](CHANGELOG.md) — release notes, including migration notes for 0.5.0
+- [`AGENTS.md`](AGENTS.md) — conventions and invariants for working on this repo
 
 ## License
 

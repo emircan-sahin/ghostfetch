@@ -1,7 +1,7 @@
 node_modules/
+npm-cache/
 dist/
 .claude/
-CLAUDE.md
 .env
 .env.*
 *.tgz
