@@ -40,6 +40,12 @@ const target = http.createServer((req, res) => {
     return;
   }
 
+  // Accepts the connection and never answers — CycleTLS hands its own timeout to Go
+  // and does not enforce it here, so this is what leaves a probe unsettled
+  if (req.url === '/never-answers') {
+    return;
+  }
+
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ ok: true }));
 });
@@ -366,4 +372,41 @@ describe('session concurrency', () => {
 
     await client.destroy();
   }, 60000);
+});
+
+
+describe('health check cannot hang the client', () => {
+  it('settles ready() when the probe endpoint never answers', async () => {
+    const client = new GhostFetch({
+      proxies: [proxyA.url],
+      healthCheck: { url: geo('/never-answers'), timeout: 1000 },
+      retry: { delays: [] },
+    });
+
+    const started = Date.now();
+    const health = await client.ready();
+    const elapsed = Date.now() - started;
+
+    // 1s per attempt, two attempts, 3s between them
+    expect(elapsed).toBeLessThan(15000);
+    expect(health.healthy).toBe(0);
+    expect(health.dead).toBe(1);
+
+    await client.destroy();
+  }, 40000);
+
+  it('a stalled probe does not block requests', async () => {
+    const client = new GhostFetch({
+      proxies: [proxyA.url],
+      healthCheck: { url: geo('/never-answers'), timeout: 1000 },
+      retry: { delays: [] },
+    });
+
+    // request() awaits ready(), so an unsettled health check used to take every
+    // request on the client with it — not just startup
+    const res = await client.get(geo('/ok'));
+    expect(res.status).toBe(200);
+
+    await client.destroy();
+  }, 40000);
 });

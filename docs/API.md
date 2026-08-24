@@ -24,7 +24,7 @@ const client = new GhostFetch(config?);
 |---|---|---|
 | `get/post/put/patch/delete/head/options(url, options?)` | `Promise<GhostFetchResponse>` | |
 | `request(method, url, options?)` | `Promise<GhostFetchResponse>` | Generic form |
-| `ready()` | `Promise<HealthCheckResult>` | Resolves when the startup health check finishes. Requests await it internally |
+| `ready()` | `Promise<HealthCheckResult>` | Resolves when the startup health check finishes. **Every request awaits it**, not just the first — calling it is optional, waiting for it is not |
 | `destroy()` | `Promise<void>` | Closes the transport, clears timers, drops sessions. Safe to call twice |
 | `session(key?)` | `Session` | Named sessions are reused; no key means a fresh one |
 | `destroySession(key)` | `boolean` | `false` if no such session |
@@ -395,6 +395,22 @@ alive. **A script that never calls `destroy()` will not exit.**
 
 `idleTimeout: 0` (the default) means *never auto-close*, not *close immediately*.
 
+`destroy()` releases the transport, but the Go subprocess' stdio pipes can stay on the
+event loop for a moment while they drain, and any sockets your own code still holds are
+yours to close. In a short-lived process that must exit on a deadline, follow `destroy()`
+with `process.exit()` rather than trusting the loop to empty:
+
+```ts
+await client.destroy();
+process.exit(0);
+```
+
+Measured after `destroy()` with a 20-proxy pool: the remaining handles are all subprocess
+pipes with no `remoteAddress`, and the process exits within a few milliseconds. A process
+that lingers far longer than that is usually holding something of its own — an open
+WebSocket, a keep-alive agent, an unref'd timer — so enumerate
+`process._getActiveHandles()` before blaming the transport.
+
 **Resources.** The subprocess is ~23MB resident, flat regardless of request volume, and
 shared across every client in a process and every Node process on the machine. A second
 process connects in ~12ms instead of ~126ms. It exits when the last client disconnects, so
@@ -421,3 +437,6 @@ Things that surprise people, collected in one place.
 - **Sessions capture cookies from the final response**, not from redirect hops.
 - **`request()` resolves for any HTTP status** that no rule objected to. A 404 is a
   successful request; check `res.status`.
+- **`request()` awaits `ready()`.** The startup health check gates every request, not just
+  the first, so anything that stalls it stalls the whole client. Both the per-probe timeout
+  and the overall ceiling exist to make that impossible; do not remove them.

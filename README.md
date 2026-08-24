@@ -81,6 +81,10 @@ try {
 process.on('SIGTERM', () => client.destroy());
 ```
 
+In a short-lived process that must exit on a deadline, follow `destroy()` with
+`process.exit()` — the subprocess pipes take a moment to drain, and anything your own code
+still holds open is yours to close.
+
 If threading `destroy()` through a script is awkward, have the client close itself once
 it goes quiet instead:
 

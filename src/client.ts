@@ -66,6 +66,9 @@ const HEALTH_RETRY_DELAYS = [0, 3000]; // 2 attempts: immediate, then +3s
 const DEFAULT_HEALTH_URL = 'https://ipinfo.io/json';
 const DEFAULT_HEALTH_TIMEOUT = 10000;
 
+/** Head-room added to the computed health-check ceiling for init and scheduling. */
+const HEALTH_CEILING_SLACK = 15000;
+
 /**
  * Close the transport after this long with nothing in flight. Off by default.
  *
@@ -170,7 +173,9 @@ export class GhostFetch {
   /**
    * Wait until the initial health check is complete.
    * Returns health check results with proxy details and country info.
-   * Requests automatically wait for this internally.
+   * Every request awaits this internally, not only the first — so a health check that
+   * cannot finish would stall the whole client, which is what the per-probe timeout and
+   * the overall ceiling are there to prevent.
    *
    * @example
    * const result = await client.ready();
@@ -737,11 +742,31 @@ export class GhostFetch {
     this.inFlight++;
     this.clearIdleTimer();
     try {
-      return await this.runHealthCheck(proxies);
+      // A ceiling on the whole sweep, on top of the per-probe timeout. Requests await
+      // ready(), so anything that can leave this pending takes the entire client with
+      // it — that is worth a second guarantee rather than trusting one.
+      return await withTimeout(this.runHealthCheck(proxies), this.healthCheckCeiling(proxies.length))
+        .catch((err) => {
+          if (!(err instanceof TimeoutError)) throw err;
+          // Give back an empty result rather than rejecting: ready() is on the path of
+          // every request, and the pool guard in runHealthCheck keeps any working pool.
+          return { total: proxies.length, healthy: 0, dead: proxies.length, countries: {}, proxies: {} };
+        });
     } finally {
       this.inFlight--;
       this.scheduleIdleShutdown();
     }
+  }
+
+  /** Longest the whole health sweep may take: every batch, every attempt, plus slack. */
+  private healthCheckCeiling(proxyCount: number): number {
+    const settings = this.config.healthCheck === false ? {} : this.config.healthCheck ?? {};
+    const timeout = settings.timeout ?? DEFAULT_HEALTH_TIMEOUT;
+
+    const batches = Math.max(1, Math.ceil(proxyCount / HEALTH_BATCH_CONCURRENCY));
+    const perProxy = HEALTH_RETRY_DELAYS.reduce((total, delay) => total + delay + timeout, 0);
+
+    return batches * perProxy + HEALTH_CEILING_SLACK;
   }
 
   private async runHealthCheck(proxies: string[]): Promise<HealthCheckResult> {
@@ -766,15 +791,23 @@ export class GhostFetch {
             }
 
             try {
-              const res = await this.withTransport((c) =>
-                c.get(url, {
-                  proxy,
-                  timeout,
-                  headers: {},
-                  // Same reasoning as executeRequest: take the raw bytes and decode
-                  // them ourselves rather than letting CycleTLS parse and re-serialize
-                  responseType: 'arraybuffer',
-                }),
+              // withTimeout for the same reason executeRequest needs it: CycleTLS
+              // hands `timeout` to Go and does not enforce it here, so a target that
+              // accepts the connection and then never answers leaves the promise
+              // unsettled — which used to hang ready(), and with it every request,
+              // for the life of the client.
+              const res = await withTimeout(
+                this.withTransport((c) =>
+                  c.get(url, {
+                    proxy,
+                    timeout,
+                    headers: {},
+                    // Same reasoning as executeRequest: take the raw bytes and decode
+                    // them ourselves rather than letting CycleTLS parse and re-serialize
+                    responseType: 'arraybuffer',
+                  }),
+                ),
+                timeout,
               );
 
               const { headers: resHeaders } = normalizeHeaders(res.headers);
@@ -998,11 +1031,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Raised by `withTimeout`. Named so callers can tell a timeout from a real failure. */
+class TimeoutError extends Error {
+  constructor(ms: number) {
+    // Keep "timeout" in the message: classifyError reads it to mark the attempt
+    // ambiguous, so a slow target never gets a proxy banned for it.
+    super(`Request timeout after ${ms}ms`);
+    this.name = 'TimeoutError';
+  }
+}
+
 /** Enforce a JS-level timeout on any Promise. CycleTLS passes timeout to Go but doesn't enforce it client-side. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`Request timeout after ${ms}ms`));
+      reject(new TimeoutError(ms));
     }, ms);
 
     promise.then(
