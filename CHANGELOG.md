@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.2
+
+### Fixed
+
+- **`require('@emircansahin/ghostfetch/package.json')` failed with
+  `ERR_PACKAGE_PATH_NOT_EXPORTED`.** The `exports` map only declared the package root, so
+  anything reading the installed package's own manifest — version reporting, some
+  bundlers, diagnostic scripts — hit a hard error. `./package.json` is now exported, which
+  is what a package with an `exports` field is expected to do.
+
+### Docs
+
+- README status line was still describing 0.5.0 and a 190-case suite.
+
 ## 0.5.1
 
 ### Fixed

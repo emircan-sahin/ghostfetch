@@ -41,9 +41,10 @@ ghostfetch is built around those two problems:
 Everything else — TLS fingerprinting, browser presets, sticky sessions, proxy health
 checks, scoped bans — exists to serve those two ideas.
 
-**Status.** Under active development. `0.5.0` was a hardening release: raw-body fidelity,
-cookie-jar scoping rules, decompression limits, and transport recovery, with the test
-suite grown to 190 cases. Full history in the [changelog](CHANGELOG.md).
+**Status.** Under active development. `0.5.0` hardened the core — raw-body fidelity,
+cookie-jar scoping rules, decompression limits, transport recovery — and `0.5.1` closed a
+case where a stalled health check could hang the client. 192 tests. Full history in the
+[changelog](CHANGELOG.md).
 
 ## Quick start
 
