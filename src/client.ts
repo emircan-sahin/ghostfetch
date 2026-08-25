@@ -19,6 +19,7 @@ import {
   GhostFetchResponse,
   HealthCheckResult,
   Interceptor,
+  PoolStatus,
   RequestOptions,
   RetryConfig,
   HttpMethod,
@@ -145,7 +146,7 @@ export class GhostFetch {
     this.config = config;
 
     // Start with empty proxy list — healthCheck will populate it
-    this.proxyManager = new ProxyManager([], config.ban);
+    this.proxyManager = new ProxyManager([], config.ban, config.maxConcurrentPerProxy);
     this.retryDefaults = { delays: config.retry?.delays ?? DEFAULT_DELAYS };
 
     // Auto health check on init if proxies provided
@@ -283,6 +284,23 @@ export class GhostFetch {
   }
 
   /**
+   * Pool status for one target, which is what `stats` cannot tell you: it reads the
+   * global ban map alone, so a crawl that scoped-bans per host sees a full pool reported
+   * while every proxy is sidelined for the host in hand.
+   *
+   * ```ts
+   * client.poolStatus('https://example.com/api');
+   * // { total: 40, banned: 0, scopedBanned: 39, busy: 1, usable: 0, inFlight: 3 }
+   * ```
+   */
+  poolStatus(url?: string, opts?: { country?: string }): PoolStatus {
+    return this.proxyManager.status({
+      country: opts?.country,
+      scope: url ? this.getScopeKey(url) : undefined,
+    });
+  }
+
+  /**
    * Get a session — a request runner that pins one proxy and keeps a cookie jar,
    * so a multi-step flow (login, then the pages behind it) looks like one visitor
    * instead of a new IP on every request.
@@ -334,6 +352,7 @@ export class GhostFetch {
       options.country,
       scope,
       options.proxyWaitTimeout ?? this.config.proxyWaitTimeout,
+      false,
     );
   }
 
@@ -448,14 +467,25 @@ export class GhostFetch {
       }
 
       // Pick a proxy (scope-aware: excludes scoped-banned proxies for this URL)
-      const proxy: string | null = options?.proxy ??
-        (await this.pickProxy(
+      // A caller-named proxy cannot be rotated away from, so honouring the cap means
+      // queueing on it. Exempting it instead would leave the setting a half-truth: a
+      // pinned session is exactly a caller-named proxy, and sending a session's whole
+      // burst to one exit IP at once is the case the cap is for.
+      let proxy: string | null;
+      if (options?.proxy) {
+        proxy = await this.proxyManager.acquireWhenFree(
+          options.proxy,
+          options.proxyWaitTimeout ?? this.config.proxyWaitTimeout,
+        );
+      } else {
+        proxy = await this.pickProxy(
           forceProxy,
           lastFailedProxy,
           options?.country,
           scope,
           options?.proxyWaitTimeout ?? this.config.proxyWaitTimeout,
-        ));
+        );
+      }
 
       try {
         const response = await this.executeRequest(method, url, proxy, options);
@@ -478,6 +508,11 @@ export class GhostFetch {
 
         lastError = this.recordTransportFailure(error, proxy);
         lastFailedProxy = proxy;
+      } finally {
+        // Released before the backoff sleep, not after the loop: a request waiting out a
+        // delay is not using its proxy, and holding the slot would idle capacity that the
+        // rest of the pool's callers are queued for.
+        if (proxy) this.proxyManager.release(proxy);
       }
     }
 
@@ -598,9 +633,18 @@ export class GhostFetch {
     country?: string,
     scope?: string,
     waitTimeout?: number,
+    /**
+     * Whether the caller is about to send on this proxy, or only choosing one.
+     *
+     * A session picks its pin here and then sends through the ordinary request path,
+     * which takes a slot of its own. Leasing during the pick too would take a slot that
+     * nothing ever gives back, and a few re-pins would retire the proxy from rotation
+     * for good.
+     */
+    take = true,
   ): Promise<string | null> {
     const opts = { exclude, country, scope };
-    const proxy = this.proxyManager.getProxy(opts);
+    const proxy = take ? this.proxyManager.lease(opts) : this.proxyManager.getProxy(opts);
 
     if (proxy) return proxy;
 
@@ -611,6 +655,16 @@ export class GhostFetch {
       return null;
     }
 
+    // Busy, not banned: the proxies are healthy and simply in use, so a moment's wait is
+    // the whole answer. This must not consult forceProxy — falling through to a direct
+    // connection because the pool was momentarily full would put the caller's own IP on
+    // the wire, which is the one outcome a proxy pool exists to prevent.
+    if (this.proxyManager.isCapacityBlocked(opts)) {
+      return take
+        ? this.proxyManager.waitForLease(opts, waitTimeout)
+        : this.proxyManager.waitForProxy(opts, waitTimeout);
+    }
+
     // Proxies exist but all banned or none match the country filter
     if (forceProxy) {
       // If filtering by country and no proxies exist for that country, fail immediately
@@ -618,7 +672,9 @@ export class GhostFetch {
         throw new NoProxyAvailableError();
       }
       // Wait until one becomes available (ban expires or refresh happens)
-      return this.proxyManager.waitForProxy(opts, waitTimeout);
+      return take
+        ? this.proxyManager.waitForLease(opts, waitTimeout)
+        : this.proxyManager.waitForProxy(opts, waitTimeout);
     }
 
     // Not forced — proceed without proxy

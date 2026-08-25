@@ -24,6 +24,7 @@ export type {
   RequestOptions,
   RetryConfig,
   BanConfig,
+  PoolStatus,
   ErrorType,
   HttpMethod,
 } from './types';

@@ -1,4 +1,4 @@
-import { BanConfig } from './types';
+import { BanConfig, PoolStatus } from './types';
 import { NoProxyAvailableError } from './errors';
 
 interface BanEntry {
@@ -18,6 +18,9 @@ const WAIT_POLL_INTERVAL = 2000;
 
 /** Floor for the poll interval so a very short wait still gets checked. */
 const MIN_POLL_INTERVAL = 25;
+
+/** Longest a wait runs when nothing gives it a deadline to compute. */
+const MAX_WAIT = 5 * 60 * 1000;
 
 /** Only sweep the scoped map once it is big enough to be worth walking. */
 const SWEEP_THRESHOLD = 256;
@@ -51,9 +54,20 @@ export class ProxyManager {
   private banConfig: Required<Omit<BanConfig, 'scopeKey'>> | false;
   private countryMap = new Map<string, string>(); // proxy → country code
   private lastSweep = 0;
+  /** proxy → requests currently in flight through it. Absent means zero. */
+  private leases = new Map<string, number>();
+  /** Waiters to re-check the moment a lease is released, so a freed slot is not sat on. */
+  private waiters = new Set<() => void>();
+  private readonly maxConcurrent: number;
 
-  constructor(proxies: string[], banConfig?: BanConfig | false) {
+  constructor(proxies: string[], banConfig?: BanConfig | false, maxConcurrentPerProxy?: number) {
     this.proxies = [...proxies];
+    // Anything that is not a usable positive count means "no cap", including NaN from a
+    // config built out of env vars — a cap of NaN would make every proxy look busy.
+    this.maxConcurrent =
+      typeof maxConcurrentPerProxy === 'number' && Number.isFinite(maxConcurrentPerProxy) && maxConcurrentPerProxy > 0
+        ? Math.floor(maxConcurrentPerProxy)
+        : 0;
     // Spreading raw config would let an explicit `undefined` overwrite a default, and the
     // result is silent: `failCount >= undefined` is always false, so nothing ever gets
     // banned. A config built from optional env vars hits this without a word of warning.
@@ -107,17 +121,13 @@ export class ProxyManager {
       ? { exclude: opts ?? undefined, country: undefined, scope: undefined }
       : opts;
 
-    let available = this.getAvailableProxies();
+    let available = this.eligible(country, scope);
 
-    // Filter by country if requested
-    if (country) {
-      const upper = country.toUpperCase();
-      available = available.filter((p) => this.countryMap.get(p) === upper);
-    }
-
-    // Filter out scoped-banned proxies
-    if (scope) {
-      available = available.filter((p) => !this.isScopedBanned(p, scope));
+    // A proxy already carrying its full share of in-flight requests is not a candidate.
+    // Handing one out anyway is how a pool that has shrunk to its last survivor funnels
+    // every concurrent request onto that one exit IP and rate-limits it instantly.
+    if (this.maxConcurrent > 0) {
+      available = available.filter((p) => this.atCapacity(p) === false);
     }
 
     const candidates = exclude
@@ -137,7 +147,85 @@ export class ProxyManager {
       }
     }
 
-    return pool[Math.floor(Math.random() * pool.length)];
+    // Spread a burst evenly instead of letting chance stack it. Uniform random over the
+    // pool is not wrong so much as lumpy: fire 40 requests at 40 proxies and some draw
+    // three while others draw none, and the unlucky ones hit the target's per-IP limit
+    // first. Preferring the least-loaded candidates lands the burst flat. With nothing in
+    // flight every count is zero, so sequential callers see the same random pick as before.
+    const lightest = pool.reduce((min, p) => Math.min(min, this.inFlight(p)), Infinity);
+    const idlest = pool.filter((p) => this.inFlight(p) === lightest);
+
+    return idlest[Math.floor(Math.random() * idlest.length)];
+  }
+
+  /** Proxies past the ban, country and scope filters — before any capacity filter. */
+  private eligible(country?: string, scope?: string): string[] {
+    let available = this.getAvailableProxies();
+
+    if (country) {
+      const upper = country.toUpperCase();
+      available = available.filter((p) => this.countryMap.get(p) === upper);
+    }
+
+    if (scope) {
+      available = available.filter((p) => !this.isScopedBanned(p, scope));
+    }
+
+    return available;
+  }
+
+  /** Is this proxy already carrying its full share of in-flight requests? */
+  private atCapacity(proxy: string): boolean {
+    if (this.maxConcurrent === 0) return false;
+    return (this.leases.get(proxy) ?? 0) >= this.maxConcurrent;
+  }
+
+  /**
+   * Select a proxy and count a request against it in one step.
+   *
+   * Selection and accounting cannot be two calls: `getProxy` is async from the caller's
+   * side, so two requests arriving together would both be handed the same proxy before
+   * either had recorded its slot, and the cap would be off by exactly the burst it exists
+   * to flatten. Every successful lease needs a matching `release`.
+   */
+  lease(opts?: GetProxyOptions | string | null): string | null {
+    const proxy = this.getProxy(opts);
+    if (proxy) this.acquire(proxy);
+    return proxy;
+  }
+
+  /** Count a request against a proxy the caller named itself. Pair with `release`. */
+  acquire(proxy: string): void {
+    this.leases.set(proxy, (this.leases.get(proxy) ?? 0) + 1);
+  }
+
+  /** Give the slot back and wake anyone waiting for one. */
+  release(proxy: string): void {
+    const next = (this.leases.get(proxy) ?? 0) - 1;
+    if (next > 0) this.leases.set(proxy, next);
+    else this.leases.delete(proxy);
+
+    // Copy first: a waiter that succeeds removes itself from the set while we iterate.
+    for (const wake of [...this.waiters]) wake();
+  }
+
+  /** Requests currently in flight through this proxy. */
+  inFlight(proxy: string): number {
+    return this.leases.get(proxy) ?? 0;
+  }
+
+  /**
+   * Are there proxies this caller could use that are merely busy right now?
+   *
+   * The distinction matters upstream: a pool blocked by bans may justify going out
+   * without a proxy, while a pool blocked only by capacity must never — the proxies are
+   * fine, they are simply in use, and a moment's wait is the whole answer.
+   */
+  isCapacityBlocked(opts?: GetProxyOptions): boolean {
+    if (this.maxConcurrent === 0) return false;
+
+    const eligible = this.eligible(opts?.country, opts?.scope);
+    return eligible.length > 0 && eligible.every((p) => this.atCapacity(p));
   }
 
   /**
@@ -161,13 +249,42 @@ export class ProxyManager {
    * If no ban will ever expire (shouldn't happen), times out after 5 minutes.
    */
   waitForProxy(opts?: GetProxyOptions, cap?: number): Promise<string> {
-    const immediate = this.getProxy(opts);
+    return this.waitFor(() => this.getProxy(opts), this.waitCeiling(opts), cap);
+  }
+
+  /**
+   * Wait until a proxy is free and take a slot on it in the same step — the blocking
+   * counterpart to `lease`. Every resolution needs a matching `release`.
+   */
+  waitForLease(opts?: GetProxyOptions, cap?: number): Promise<string> {
+    return this.waitFor(() => this.lease(opts), this.waitCeiling(opts), cap);
+  }
+
+  /**
+   * Take a slot on one named proxy, waiting if it is already full.
+   *
+   * For a caller that named its own proxy — a pinned session, most of all. Rotation is
+   * not an option there, so the only way to honour the cap is to queue. Nothing outside
+   * this client holds these slots, so the wait always ends: the requests ahead finish.
+   */
+  acquireWhenFree(proxy: string, cap?: number): Promise<string> {
+    return this.waitFor(
+      () => {
+        if (this.atCapacity(proxy)) return null;
+        this.acquire(proxy);
+        return proxy;
+      },
+      MAX_WAIT,
+      cap,
+    );
+  }
+
+  private waitFor(pick: () => string | null, ceiling: number, cap: number | undefined): Promise<string> {
+    const immediate = pick();
     if (immediate) return Promise.resolve(immediate);
 
-    // Calculate max wait from earliest ban expiry + buffer
-    const untilFree = this.getEarliestBanExpiry(opts) ?? 5 * 60 * 1000;
     // A caller on a request path would rather fail than block for the whole ban.
-    const maxWait = Number.isFinite(cap) ? Math.min(untilFree, cap as number) : untilFree;
+    const maxWait = Number.isFinite(cap) ? Math.min(ceiling, cap as number) : ceiling;
 
     // Poll several times within the window. A fixed 2s interval would never fire at
     // all when a short ban puts maxWait below it, and the wait would time out even
@@ -175,27 +292,54 @@ export class ProxyManager {
     const pollInterval = Math.max(MIN_POLL_INTERVAL, Math.min(WAIT_POLL_INTERVAL, Math.floor(maxWait / 4)));
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      let settled = false;
+
+      const stop = (): void => {
+        settled = true;
+        clearTimeout(timeout);
         clearInterval(interval);
+        this.waiters.delete(wake);
+      };
+
+      // Polling alone would make a request wait out the interval for a slot that came
+      // free milliseconds ago. Capacity, unlike a ban, has no expiry to schedule against,
+      // so release() drives this instead and the poll is only a backstop for bans.
+      const wake = (): void => {
+        if (settled) return;
+        const proxy = pick();
+        if (!proxy) return;
+        stop();
+        resolve(proxy);
+      };
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        stop();
         // One last look — a ban may have lapsed between the final poll and now
-        const proxy = this.getProxy(opts);
+        const proxy = pick();
         if (proxy) resolve(proxy);
         else reject(new NoProxyAvailableError());
       }, maxWait);
 
-      const interval = setInterval(() => {
-        const proxy = this.getProxy(opts);
-        if (proxy) {
-          clearTimeout(timeout);
-          clearInterval(interval);
-          resolve(proxy);
-        }
-      }, pollInterval);
+      const interval = setInterval(wake, pollInterval);
+      this.waiters.add(wake);
 
       // Waiting for a proxy must not keep the Node process alive on its own
       timeout.unref?.();
       interval.unref?.();
     });
+  }
+
+  /**
+   * How long a wait can usefully run before giving up.
+   *
+   * A ban has an expiry to compute. A busy proxy does not — it frees when the request
+   * on it finishes, which no clock here can predict — so capacity falls back to the long
+   * ceiling and leans on release() to cut the wait short in practice.
+   */
+  private waitCeiling(opts?: GetProxyOptions): number {
+    if (this.isCapacityBlocked(opts)) return MAX_WAIT;
+    return this.getEarliestBanExpiry(opts) ?? MAX_WAIT;
   }
 
   /** Get ms until the earliest ban expires, or null if no active bans. */
@@ -401,6 +545,33 @@ export class ProxyManager {
   getProxiesByCountry(country: string): string[] {
     const upper = country.toUpperCase();
     return this.proxies.filter((p) => this.countryMap.get(p) === upper);
+  }
+
+  /**
+   * What the pool looks like for one caller's filters, right now.
+   *
+   * `available` and `banned` read the global ban map only, so on a crawl that scoped-bans
+   * per target they report a healthy pool while every proxy is sidelined for the host in
+   * hand. This is the view that separates the two, plus the proxies that are merely busy.
+   */
+  status(opts?: GetProxyOptions): PoolStatus {
+    const available = this.getAvailableProxies();
+    const eligible = this.eligible(opts?.country, opts?.scope);
+    const free = eligible.filter((p) => this.atCapacity(p) === false);
+
+    let inFlight = 0;
+    for (const count of this.leases.values()) inFlight += count;
+
+    return {
+      total: this.proxies.length,
+      banned: this.proxies.length - available.length,
+      scopedBanned: opts?.scope
+        ? available.filter((p) => this.isScopedBanned(p, opts.scope as string)).length
+        : 0,
+      busy: eligible.length - free.length,
+      usable: free.length,
+      inFlight,
+    };
   }
 
   /** Get total proxy count. */

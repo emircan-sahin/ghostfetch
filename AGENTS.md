@@ -12,7 +12,7 @@ Windsurf and Cline read it directly; Claude Code does not, so `CLAUDE.md` is a o
 ```bash
 pnpm install
 pnpm build          # CJS + ESM + types
-pnpm test           # vitest, 190 tests
+pnpm test           # vitest, 229 tests
 pnpm test:coverage
 ```
 
@@ -128,6 +128,37 @@ corrupt codings still fall back to raw bytes; only the size breach throws.
 
 If every proxy fails while a working pool already exists, keep the existing pool. A
 provider outage must not leave the client with nothing.
+
+### Capacity blocking is not ban blocking
+
+`pickProxy` asks `isCapacityBlocked` *before* it consults `forceProxy`, and waits either
+way. The two states look alike from `getProxy` — both return `null` — and are opposites:
+a pool emptied by bans may justify going direct, a pool that is merely busy never does.
+Collapsing them into one branch means a burst that fills the pool for a few hundred
+milliseconds silently sends the caller's own IP to the target, which is the single failure
+a proxy pool exists to prevent.
+
+Guarded by `tests/proxy-concurrency.test.ts`.
+
+### Choosing a session pin must not lease
+
+`pickSessionProxy` passes `take: false` to `pickProxy`. A session picks its pin there and
+then sends through the ordinary request path, which takes a slot of its own. Leasing
+during the pick as well takes a slot nothing ever releases, and a handful of re-pins
+retires that proxy from rotation for good — silently, because the pool still reports it
+as healthy.
+
+Guarded by `tests/proxy-concurrency.test.ts`.
+
+### Leases are taken at selection, not after it
+
+`ProxyManager.lease()` selects and counts in one synchronous step. Splitting it — pick,
+then count — reopens the gap `Session.resolvePin` closes for pinning: selection is async
+from the caller's side, so requests arriving together are all handed the same proxy before
+any has recorded its slot, and the cap is off by exactly the burst it exists to flatten.
+
+`getProxy()` stays side-effect free because it is public API and is what `isUsable` and
+the tests call.
 
 ### Unref'd timers
 

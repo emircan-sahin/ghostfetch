@@ -152,7 +152,9 @@ const health = await client.ready();
 ```
 
 On startup each proxy is probed and its country resolved; dead ones are dropped. Requests
-then pick a random healthy proxy. Failures are classified before anything is blamed:
+then pick a healthy proxy, preferring the ones carrying the least traffic so a burst lands
+flat instead of stacking on whichever the dice favoured. Failures are classified before
+anything is blamed:
 
 | Class | Meaning | Effect on the proxy |
 |---|---|---|
@@ -162,6 +164,19 @@ then pick a random healthy proxy. Failures are classified before anything is bla
 
 That distinction is the point of the library: a slow target site should not burn through
 your proxy pool.
+
+Bans shrink the pool, and a pool worn down to one proxy hands that proxy every concurrent
+request at once — which rate-limits the last exit IP that still worked. `maxConcurrentPerProxy`
+caps how many requests may be in flight through any one proxy; the rest queue instead of
+piling on:
+
+```ts
+new GhostFetch({ proxies, maxConcurrentPerProxy: 3 });   // 0, the default, is no cap
+```
+
+`client.poolStatus(url)` shows what the pool looks like for one target, which is what
+`stats` cannot tell you — it reads the global ban map alone, so a crawl that bans per host
+reports a full pool while every proxy is sidelined for the host in hand.
 
 Also available: country filtering (`{ country: 'DE' }`), `forceProxy` to wait rather than
 go direct, automatic refresh via `onProxyRefresh`, scoped bans that sideline a proxy for
@@ -260,7 +275,7 @@ catch (err) {
 |---|---|
 | `MaxRetriesExceededError` | Every attempt failed; `lastError` has the details |
 | `CloudflareJSChallengeError` | A JS challenge was detected |
-| `NoProxyAvailableError` | `forceProxy` was on and no proxy became available |
+| `NoProxyAvailableError` | `forceProxy` was on and no proxy became available, or a wait for a free slot ran past `proxyWaitTimeout` |
 | `InterceptorError` | Your interceptor's `check()` threw — not retried, `cause` holds the original |
 | `GhostFetchRequestError` | Base class for the request errors; also what `lastError` is |
 

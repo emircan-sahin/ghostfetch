@@ -55,6 +55,22 @@ export interface GhostFetchConfig {
   forceProxy?: boolean;
 
   /**
+   * Most requests allowed in flight through any single proxy at once. `0` (the default)
+   * means no cap.
+   *
+   * Worth setting when bans can shrink the usable pool. Rotation picks uniformly from
+   * whatever survives the ban, country and scope filters, so a pool worn down to its last
+   * proxy hands that one proxy every concurrent request at the same moment — and the exit
+   * IP that was still working is rate-limited or banned within seconds. A cap makes
+   * requests queue for a free slot instead of piling onto the survivor.
+   *
+   * The wait is bounded by `proxyWaitTimeout`, and a request that waits out that bound
+   * throws `NoProxyAvailableError` rather than going out unproxied. A proxy named
+   * explicitly per request is counted but never queued.
+   */
+  maxConcurrentPerProxy?: number;
+
+  /**
    * Longest a request will wait for a proxy to free up, in ms. No cap by default: the wait
    * runs until the blocking ban lapses.
    *
@@ -420,3 +436,24 @@ export interface HealthCheckResult {
 export type { BrowserPreset };
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS';
+
+/**
+ * A snapshot of the pool as one caller's filters see it. From `GhostFetch.poolStatus()`.
+ *
+ * `banned` and `scopedBanned` do not overlap: a proxy the global ban map holds is counted
+ * once, as `banned`, and never looked at again.
+ */
+export interface PoolStatus {
+  /** Proxies configured, healthy or not. */
+  total: number;
+  /** Sidelined for every target by the global ban map. */
+  banned: number;
+  /** Still fine elsewhere, but banned for this particular scope. */
+  scopedBanned: number;
+  /** Eligible for this caller, but already at `maxConcurrentPerProxy`. */
+  busy: number;
+  /** Could take a request right now. */
+  usable: number;
+  /** Requests in flight across the whole pool. */
+  inFlight: number;
+}

@@ -45,7 +45,8 @@ const client = new GhostFetch(config?);
 | `retry` | `RetryConfig` | see [Retry](#retry) | |
 | `ban` | `BanConfig \| false` | `{ maxFailures: 3, duration: 3600000, dedupWindow: 1000, resetScopedOnSuccess: true }` | `false` disables banning |
 | `forceProxy` | `boolean` | `false` | Wait for a proxy instead of going direct |
-| `proxyWaitTimeout` | `number` | — | Longest a request waits for a proxy, with `forceProxy`. Uncapped by default |
+| `proxyWaitTimeout` | `number` | — | Longest a request waits for a proxy. Uncapped by default |
+| `maxConcurrentPerProxy` | `number` | `0` (off) | Most requests in flight through one proxy. See [Concurrency](#concurrency) |
 | `cloudflare` | `'throw' \| 'retry'` | `'throw'` | What to do on a detected JS challenge |
 | `idleTimeout` | `number` | `0` (off) | Close the transport after this long idle. See [Lifecycle](#lifecycle) |
 | `maxDecompressedSize` | `number` | `104857600` (100MB) | Reject bodies that expand past this |
@@ -280,6 +281,62 @@ to free up, and throws `NoProxyAvailableError` if none ever does.
 await client.get(url, { forceProxy: true, country: 'DE' });
 ```
 
+### Concurrency
+
+`maxConcurrentPerProxy` caps how many requests may be in flight through a single proxy.
+`0`, the default, is no cap.
+
+```ts
+new GhostFetch({ proxies, maxConcurrentPerProxy: 3 });
+```
+
+Worth setting whenever bans can shrink the usable pool. Rotation picks uniformly from
+whatever survives the ban, country and scope filters, so a pool worn down to one proxy
+hands that proxy every concurrent request at the same instant — and the one exit IP that
+was still working is rate-limited within seconds. With a cap, requests queue for a free
+slot instead of piling onto the survivor.
+
+Selection also prefers the least-loaded candidates, cap or no cap. Uniform random over
+the pool is lumpy — fire 40 requests at 40 proxies and some draw three while others draw
+none, and the unlucky ones meet the target's per-IP limit first. With nothing in flight
+every count is zero, so a sequential caller sees the same random pick as before.
+
+Details worth knowing:
+
+- A request waiting for a slot is bounded by `proxyWaitTimeout` and throws
+  `NoProxyAvailableError` if the wait runs out. **It never falls back to a direct
+  connection**, whatever `forceProxy` says — a full pool is not an absent one, and going
+  direct would put your own IP on the wire.
+- The slot is released before a retry's backoff sleep, so a request waiting out a delay
+  does not hold capacity.
+- A proxy named explicitly (`{ proxy: '...' }`, and so every `Session`, which pins one)
+  cannot be rotated away from, so it queues on that one proxy instead. A session's burst
+  going to a single exit IP all at once is the case the cap is for.
+- Startup and refresh health checks do not go through the pool and are not capped.
+
+### poolStatus
+
+`stats` reads the global ban map alone. On a crawl that bans per target it reports a full
+pool while every proxy is sidelined for the host in hand. `poolStatus(url)` is the view
+that separates them.
+
+```ts
+client.poolStatus('https://example.com/api');
+// { total: 40, banned: 0, scopedBanned: 39, busy: 1, usable: 0, inFlight: 3 }
+```
+
+| Field | Meaning |
+|---|---|
+| `total` | Proxies configured, healthy or not |
+| `banned` | Sidelined for every target by the global ban map |
+| `scopedBanned` | Fine elsewhere, banned for this scope |
+| `busy` | Eligible, but already at `maxConcurrentPerProxy` |
+| `usable` | Could take a request right now |
+| `inFlight` | Requests in flight across the whole pool |
+
+Omit the URL for the pool as a whole. Pass `{ country }` as a second argument to narrow it
+the way a request would.
+
 ### Refresh
 
 ```ts
@@ -402,7 +459,7 @@ import {
 |---|---|---|
 | `MaxRetriesExceededError` | `attempts`, `lastError` | Every attempt failed |
 | `CloudflareJSChallengeError` | `type`, `proxy` | A JS challenge was detected |
-| `NoProxyAvailableError` | — | `forceProxy` on, no proxy available |
+| `NoProxyAvailableError` | — | `forceProxy` on and no proxy available, or a wait for a free slot ran past `proxyWaitTimeout` |
 | `InterceptorError` | `interceptor`, `cause` | Your `check()` threw |
 | `GhostFetchRequestError` | `type`, `status`, `body`, `proxy`, `cause` | Base class; also what `lastError` is |
 

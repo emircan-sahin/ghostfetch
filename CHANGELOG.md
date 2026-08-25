@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+
+- **`maxConcurrentPerProxy` — a cap on how many requests may be in flight through one
+  proxy.** Off by default (`0`). Rotation picks uniformly from whatever survives the ban,
+  country and scope filters, so a pool that bans have worn down to a single proxy hands
+  that proxy every concurrent request at the same instant; the last working exit IP is
+  rate-limited within seconds and the pool is empty. With a cap, requests queue for a free
+  slot. `ProxyManager` gains `lease`, `acquire`, `release`, `inFlight`, `isCapacityBlocked`
+  and `waitForLease` to support it — `getProxy` is unchanged and still has no side effect.
+
+  A wait for a slot never falls through to a direct connection, whatever `forceProxy` is
+  set to: a full pool is not an absent one, and going direct would put the caller's own IP
+  on the wire. The wait is bounded by `proxyWaitTimeout` and ends in
+  `NoProxyAvailableError`. A proxy named explicitly per request — which includes every
+  `Session`, since a session pins one — cannot be rotated away from, so it queues on that
+  proxy instead of skipping the cap.
+
+- **`poolStatus(url?)` — pool health as one target sees it.** `stats` reads the global ban
+  map alone, so a crawl that scoped-bans per host reports a full pool while every proxy is
+  sidelined for the host in hand. `poolStatus` separates `banned` from `scopedBanned` and
+  adds `busy`, `usable` and `inFlight`. `stats` is unchanged.
+
+### Changed
+
+- **Rotation prefers the least-loaded proxies.** Uniform random over the pool is lumpy: 40
+  requests across 40 proxies leave some drawing three and others none, and the ones that
+  drew three meet a per-IP rate limit first. Ties — which is every proxy when nothing is in
+  flight — are still broken at random, so sequential callers see no change. Provider
+  diversity on retry still takes precedence.
+
+### Fixed
+
+- **`waitForProxy` no longer sits out its poll interval when a proxy frees up early.**
+  Releasing a slot wakes waiters directly; the poll remains as the backstop for bans.
+
 ## 0.5.3
 
 ### Changed
