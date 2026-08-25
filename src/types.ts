@@ -55,6 +55,17 @@ export interface GhostFetchConfig {
   forceProxy?: boolean;
 
   /**
+   * Longest a request will wait for a proxy to free up, in ms. No cap by default: the wait
+   * runs until the blocking ban lapses.
+   *
+   * Only relevant with `forceProxy`, and the point of it is to make `forceProxy` usable on
+   * a request path. Without a cap the choice is between leaving through the caller's own
+   * IP and blocking for the whole ban; with one, a request that cannot get a proxy in time
+   * fails with `NoProxyAvailableError` and the caller decides what to do.
+   */
+  proxyWaitTimeout?: number;
+
+  /**
    * Called periodically to refresh the proxy list.
    * When called, all bans are cleared and the returned list replaces the current one.
    */
@@ -200,6 +211,29 @@ export interface BanConfig {
    * scopeKey: (url) => { const u = new URL(url); return `${u.hostname}${u.pathname.split('/').slice(0, 3).join('/')}`; }
    */
   scopeKey?: (url: string) => string;
+
+  /**
+   * How close together failures have to be to count as one strike (default: 1000).
+   *
+   * It also decides which successes are allowed to forgive a strike: a success that lands
+   * within this window of a failure belongs to the same burst as that failure, so it is
+   * not taken as evidence the proxy is fine. Raise it for workloads that fan out widely
+   * enough that a burst spans more than a second.
+   */
+  dedupWindow?: number;
+
+  /**
+   * Whether a success clears a proxy's accumulated strikes for that scope (default: true).
+   *
+   * Set to `false` when the target rate-limits per IP per endpoint. There a proxy keeps
+   * answering 200 in between its 429s, and forgiving the strikes means it never reaches
+   * `maxFailures` — so it stays in rotation on the one endpoint that is pushing back, and
+   * a 429 eventually turns into a real block.
+   *
+   * An active ban is never lifted by a success either way; this only controls the strikes
+   * counted before one.
+   */
+  resetScopedOnSuccess?: boolean;
 }
 
 /**
@@ -313,6 +347,9 @@ export interface RequestOptions {
    * Defaults to instance-level forceProxy (which defaults to false).
    */
   forceProxy?: boolean;
+
+  /** Override `proxyWaitTimeout` for this request. */
+  proxyWaitTimeout?: number;
 
   /**
    * Per-request interceptor. Takes priority over instance-level interceptors.

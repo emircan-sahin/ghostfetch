@@ -13,10 +13,18 @@ describe('ProxyManager — global bans', () => {
     expect(pm.available).toBe(2);
   });
 
-  it('reportSuccess resets the fail counter', () => {
-    const pm = new ProxyManager([A], { maxFailures: 2, duration: 60000 });
-    pm.reportFailure(A);
+  it('reportSuccess resets the fail counter once the burst has passed', async () => {
+    // dedupWindow is short here on purpose: a success inside the window of a failure
+    // belongs to the same burst and is not allowed to forgive it, so the assertion below
+    // would hold for the wrong reason.
+    const pm = new ProxyManager([A], { maxFailures: 2, duration: 60000, dedupWindow: 20 });
+
+    expect(pm.reportFailure(A)).toBe(false); // strike 1
+    await new Promise((r) => setTimeout(r, 30));
     pm.reportSuccess(A);
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(pm.reportFailure(A)).toBe(false); // strike 1 again, so the counter did reset
     expect(pm.getAvailableProxies()).toEqual([A]);
   });
 });
@@ -34,16 +42,19 @@ describe('ProxyManager — scoped bans', () => {
     expect(new Set([pm.getProxy({ scope: 'binance.com' })])).not.toEqual(new Set([null]));
   });
 
-  it('reportScopedSuccess resets the scope fail counter', () => {
-    const pm = new ProxyManager([A], { maxFailures: 2, duration: 60000 });
+  it('reportScopedSuccess resets the scope fail counter once the burst has passed', async () => {
+    const pm = new ProxyManager([A], { maxFailures: 2, duration: 60000, dedupWindow: 20 });
 
     // One failure — not banned yet
     expect(pm.reportScopedFailure(A, 'okx.com')).toBe(false);
 
     // A successful request on the same scope must clear the counter, otherwise the
-    // next single failure would ban the proxy as if it had failed twice in a row.
+    // next single failure would ban the proxy as if it had failed twice in a row. It has
+    // to land clear of the failure's dedup window to count as evidence at all.
+    await new Promise((r) => setTimeout(r, 30));
     pm.reportScopedSuccess(A, 'okx.com');
 
+    await new Promise((r) => setTimeout(r, 30));
     expect(pm.reportScopedFailure(A, 'okx.com')).toBe(false);
     expect(pm.getProxy({ scope: 'okx.com' })).toBe(A);
   });

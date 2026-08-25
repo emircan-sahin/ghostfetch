@@ -43,8 +43,9 @@ const client = new GhostFetch(config?);
 | `healthCheck` | `false \| { url?, timeout? }` | ipinfo.io, 10s | Startup probe. `false` skips it |
 | `timeout` | `number` | `30000` | Per-request timeout in ms |
 | `retry` | `RetryConfig` | see [Retry](#retry) | |
-| `ban` | `BanConfig \| false` | `{ maxFailures: 3, duration: 3600000 }` | `false` disables banning |
+| `ban` | `BanConfig \| false` | `{ maxFailures: 3, duration: 3600000, dedupWindow: 1000, resetScopedOnSuccess: true }` | `false` disables banning |
 | `forceProxy` | `boolean` | `false` | Wait for a proxy instead of going direct |
+| `proxyWaitTimeout` | `number` | — | Longest a request waits for a proxy, with `forceProxy`. Uncapped by default |
 | `cloudflare` | `'throw' \| 'retry'` | `'throw'` | What to do on a detected JS challenge |
 | `idleTimeout` | `number` | `0` (off) | Close the transport after this long idle. See [Lifecycle](#lifecycle) |
 | `maxDecompressedSize` | `number` | `104857600` (100MB) | Reject bodies that expand past this |
@@ -96,6 +97,7 @@ precision survives.
 | `retry` | `RetryConfig` | Overrides config |
 | `proxy` | `string` | Force one specific proxy, bypassing selection |
 | `forceProxy` | `boolean` | Overrides config |
+| `proxyWaitTimeout` | `number` | Overrides config |
 | `country` | `string` | ISO 3166-1 alpha-2, e.g. `'DE'`. Requires health check data |
 | `interceptor` | `{ check }` | Takes priority over instance interceptors; no `match` needed |
 | `headerOrder` `orderAsProvided` `disableRedirect` `insecureSkipVerify` `forceHTTP1` `forceHTTP3` `serverName` `cookies` | | Override the config value |
@@ -199,7 +201,7 @@ kept — a provider outage should not leave you with nothing.
 | Class | Trigger | Effect |
 |---|---|---|
 | `proxy` | `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `EHOSTUNREACH`, `ENETUNREACH`, `EPIPE`; "proxy"/"tunnel" in the message | Fail count +1 |
-| `server` | An HTTP response arrived | Fail count reset |
+| `server` | An HTTP response arrived | Fail count reset, unless a ban is running or a failure landed inside `dedupWindow` |
 | `ambiguous` | `ETIMEDOUT`, `ECONNRESET`, `ECONNABORTED`, "socket hang up", "timeout" | Untouched |
 
 Unknown errors default to `server`, which keeps proxies in the pool.
@@ -211,9 +213,33 @@ new GhostFetch({ ban: { maxFailures: 3, duration: 3600000 } });
 new GhostFetch({ ban: false });   // never sideline a proxy
 ```
 
-Failures within a 1-second window count as one, so a burst of parallel requests hitting
-the same bad proxy is one strike rather than ten. A request that returns a response to the
-caller resets both the global and the scope-level counter.
+Failures within `dedupWindow` (1 second by default) count as one, so a burst of parallel
+requests hitting the same bad proxy is one strike rather than ten.
+
+A request that returns a response to the caller clears the counter — but not
+unconditionally, because a proxy must not be able to talk its way out of the ban it just
+earned:
+
+- **A running ban outlives a success.** The request that earns a ban and the ones that
+  answer 200 right behind it belong to the same burst, so a ban would never survive the
+  moment it was created. It ends when its `duration` ends.
+- **A success inside `dedupWindow` of a failure does not clear the strikes.** It shares a
+  burst with that failure, so it says nothing about whether the proxy is welcome again —
+  a target that rate-limits per IP answers part of a burst and refuses the rest.
+
+Against a target that rate-limits **per IP per endpoint** even that is too forgiving: the
+proxy keeps answering 200 between its 429s, never reaches `maxFailures`, and stays in
+rotation on the one endpoint pushing back — which is how a 429 turns into a real block.
+Turn the forgiveness off for that case:
+
+```ts
+new GhostFetch({ ban: { resetScopedOnSuccess: false } });
+```
+
+Strikes clear on their own either way. `duration` is what an entry is allowed to live: a
+banned proxy comes back with a clean slate once its ban lapses, and strikes that never
+reached a ban are dropped the same length of time after the last failure. Raising
+`duration` lengthens both.
 
 **Scoped bans** sideline a proxy for one site instead of everywhere — useful when one
 target blocks an IP that every other target still accepts:

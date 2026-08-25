@@ -328,7 +328,13 @@ export class GhostFetch {
     if (current && this.proxyManager.isUsable(current, filters)) return current;
 
     const forceProxy = options.forceProxy ?? this.config.forceProxy ?? false;
-    return this.pickProxy(forceProxy, current, options.country, scope);
+    return this.pickProxy(
+      forceProxy,
+      current,
+      options.country,
+      scope,
+      options.proxyWaitTimeout ?? this.config.proxyWaitTimeout,
+    );
   }
 
   /** Get all non-banned proxy URLs, optionally filtered by country. */
@@ -442,7 +448,14 @@ export class GhostFetch {
       }
 
       // Pick a proxy (scope-aware: excludes scoped-banned proxies for this URL)
-      const proxy: string | null = options?.proxy ?? await this.pickProxy(forceProxy, lastFailedProxy, options?.country, scope);
+      const proxy: string | null = options?.proxy ??
+        (await this.pickProxy(
+          forceProxy,
+          lastFailedProxy,
+          options?.country,
+          scope,
+          options?.proxyWaitTimeout ?? this.config.proxyWaitTimeout,
+        ));
 
       try {
         const response = await this.executeRequest(method, url, proxy, options);
@@ -584,6 +597,7 @@ export class GhostFetch {
     exclude?: string | null,
     country?: string,
     scope?: string,
+    waitTimeout?: number,
   ): Promise<string | null> {
     const opts = { exclude, country, scope };
     const proxy = this.proxyManager.getProxy(opts);
@@ -604,7 +618,7 @@ export class GhostFetch {
         throw new NoProxyAvailableError();
       }
       // Wait until one becomes available (ban expires or refresh happens)
-      return this.proxyManager.waitForProxy(opts);
+      return this.proxyManager.waitForProxy(opts, waitTimeout);
     }
 
     // Not forced — proceed without proxy

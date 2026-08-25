@@ -157,7 +157,7 @@ then pick a random healthy proxy. Failures are classified before anything is bla
 | Class | Meaning | Effect on the proxy |
 |---|---|---|
 | `proxy` | Never reached the server — DNS failure, connection refused | Fail count +1 |
-| `server` | A response came back, so the proxy did its job | Fail count reset |
+| `server` | A response came back, so the proxy did its job | Fail count reset, unless a ban is running or a failure just landed |
 | `ambiguous` | Timeout or reset — could be either | Untouched |
 
 That distinction is the point of the library: a slow target site should not burn through

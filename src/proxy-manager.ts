@@ -4,7 +4,10 @@ import { NoProxyAvailableError } from './errors';
 interface BanEntry {
   bannedAt: number;
   failCount: number;
+  /** When the strike was counted. Anchors the dedup window, so it stays put inside a burst. */
   lastFailure: number;
+  /** When a failure was last seen at all, counted or deduped. Decides what a success forgives. */
+  lastSeenFailure: number;
 }
 
 /** Failures within this window (ms) from different requests count as 1. */
@@ -16,9 +19,23 @@ const WAIT_POLL_INTERVAL = 2000;
 /** Floor for the poll interval so a very short wait still gets checked. */
 const MIN_POLL_INTERVAL = 25;
 
+/** Only sweep the scoped map once it is big enough to be worth walking. */
+const SWEEP_THRESHOLD = 256;
+
+/** And no more often than this, so a busy client does not walk it on every failure. */
+const SWEEP_INTERVAL = 60_000;
+
+/** Drop keys whose value is `undefined` so they cannot overwrite a default. */
+function defined<T extends object>(source: T | undefined): Partial<T> {
+  if (!source) return {};
+  return Object.fromEntries(Object.entries(source).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
 const DEFAULT_BAN: Required<Omit<BanConfig, 'scopeKey'>> = {
   maxFailures: 3,
   duration: 60 * 60 * 1000, // 1 hour
+  dedupWindow: DEDUP_WINDOW,
+  resetScopedOnSuccess: true,
 };
 
 export interface GetProxyOptions {
@@ -33,10 +50,45 @@ export class ProxyManager {
   private scopedBanMap = new Map<string, BanEntry>(); // "proxy::scope" → BanEntry
   private banConfig: Required<Omit<BanConfig, 'scopeKey'>> | false;
   private countryMap = new Map<string, string>(); // proxy → country code
+  private lastSweep = 0;
 
   constructor(proxies: string[], banConfig?: BanConfig | false) {
     this.proxies = [...proxies];
-    this.banConfig = banConfig === false ? false : { ...DEFAULT_BAN, ...banConfig };
+    // Spreading raw config would let an explicit `undefined` overwrite a default, and the
+    // result is silent: `failCount >= undefined` is always false, so nothing ever gets
+    // banned. A config built from optional env vars hits this without a word of warning.
+    this.banConfig = banConfig === false ? false : { ...DEFAULT_BAN, ...defined(banConfig) };
+  }
+
+  /**
+   * Whether this entry has outlived its usefulness — either its ban has expired, or it is
+   * a set of strikes the proxy has since gone quiet on.
+   *
+   * Strikes have to age out for `maxFailures` to mean anything. Without it, a proxy that
+   * fails once a month accumulates its way to a ban, and an entry no one looks at again
+   * sits in the map forever.
+   */
+  private stale(entry: BanEntry, now: number): boolean {
+    if (this.banConfig === false) return false;
+
+    const since = entry.bannedAt > 0 ? entry.bannedAt : entry.lastFailure;
+    return now - since >= this.banConfig.duration;
+  }
+
+  /**
+   * Drop entries nothing will look at again.
+   *
+   * A scope key is a proxy paired with a target, so a crawler that walks many hosts grows
+   * this map without bound — the read paths only ever clean the key they were asked about.
+   */
+  private sweepScoped(now: number): void {
+    if (this.scopedBanMap.size < SWEEP_THRESHOLD) return;
+    if (now - this.lastSweep < SWEEP_INTERVAL) return;
+
+    this.lastSweep = now;
+    for (const [key, entry] of this.scopedBanMap) {
+      if (this.stale(entry, now)) this.scopedBanMap.delete(key);
+    }
   }
 
   /**
@@ -108,12 +160,14 @@ export class ProxyManager {
    * Automatically calculates timeout from the earliest ban expiry.
    * If no ban will ever expire (shouldn't happen), times out after 5 minutes.
    */
-  waitForProxy(opts?: GetProxyOptions): Promise<string> {
+  waitForProxy(opts?: GetProxyOptions, cap?: number): Promise<string> {
     const immediate = this.getProxy(opts);
     if (immediate) return Promise.resolve(immediate);
 
     // Calculate max wait from earliest ban expiry + buffer
-    const maxWait = this.getEarliestBanExpiry() ?? 5 * 60 * 1000;
+    const untilFree = this.getEarliestBanExpiry(opts) ?? 5 * 60 * 1000;
+    // A caller on a request path would rather fail than block for the whole ban.
+    const maxWait = Number.isFinite(cap) ? Math.min(untilFree, cap as number) : untilFree;
 
     // Poll several times within the window. A fixed 2s interval would never fire at
     // all when a short ban puts maxWait below it, and the wait would time out even
@@ -145,19 +199,31 @@ export class ProxyManager {
   }
 
   /** Get ms until the earliest ban expires, or null if no active bans. */
-  private getEarliestBanExpiry(): number | null {
+  private getEarliestBanExpiry(opts?: GetProxyOptions): number | null {
     if (this.banConfig === false) return null;
 
     const now = Date.now();
+    const duration = this.banConfig.duration;
+    const country = opts?.country?.toUpperCase();
+
+    const remaining = (entry: BanEntry | undefined): number =>
+      entry?.bannedAt ? Math.max(0, entry.bannedAt + duration - now) : 0;
+
     let earliest = Infinity;
 
-    for (const [, entry] of this.banMap) {
-      if (!entry.bannedAt) continue;
-      const expiresAt = entry.bannedAt + this.banConfig.duration;
-      const remaining = expiresAt - now;
-      if (remaining > 0 && remaining < earliest) {
-        earliest = remaining;
-      }
+    for (const proxy of this.proxies) {
+      // A proxy the caller could never be handed says nothing about how long they wait.
+      if (country && this.countryMap.get(proxy) !== country) continue;
+
+      // Every ban on a proxy has to lapse before it comes back, so its own wait is the
+      // longest of them — and the pool frees up when the first such proxy does. Taking the
+      // minimum across both maps instead would promise a proxy that is still banned the
+      // other way; reading only the global map, as this did before scoped bans were
+      // considered, reports nothing to wait for while every proxy is sidelined for a scope.
+      const scoped = opts?.scope ? this.scopedBanMap.get(`${proxy}::${opts.scope}`) : undefined;
+      const wait = Math.max(remaining(this.banMap.get(proxy)), remaining(scoped));
+
+      if (wait < earliest) earliest = wait;
     }
 
     // Add 1s buffer so the ban is definitely expired when we check
@@ -169,16 +235,16 @@ export class ProxyManager {
     if (this.banConfig === false) return [...this.proxies];
 
     const now = Date.now();
-    const duration = this.banConfig.duration;
+    this.sweepScoped(now);
+
     return this.proxies.filter((proxy) => {
       const ban = this.banMap.get(proxy);
       if (!ban) return true;
-      if (!ban.bannedAt) return true;
-      if (now - ban.bannedAt >= duration) {
+      if (this.stale(ban, now)) {
         this.banMap.delete(proxy);
         return true;
       }
-      return false;
+      return !ban.bannedAt;
     });
   }
 
@@ -193,26 +259,30 @@ export class ProxyManager {
     if (this.banConfig === false) return false;
 
     const now = Date.now();
-    const entry = this.banMap.get(proxy);
+    const existing = this.banMap.get(proxy);
+    // A stale record must not carry its strikes into a fresh incident, or a proxy comes
+    // back from a ban with no allowance left and is banned again on its first stumble.
+    const entry = existing && this.stale(existing, now) ? undefined : existing;
 
-    if (entry && (now - entry.lastFailure) < DEDUP_WINDOW) {
-      // Check if actually still banned (not expired)
-      return entry.bannedAt > 0 && (now - entry.bannedAt) < this.banConfig.duration;
+    if (entry && (now - entry.lastFailure) < this.banConfig.dedupWindow) {
+      // Deduped, but still a failure: a success right after it is part of this burst.
+      entry.lastSeenFailure = now;
+      return entry.bannedAt > 0;
     }
 
     const failCount = (entry?.failCount ?? 0) + 1;
+    const bannedAt = failCount >= this.banConfig.maxFailures ? now : 0;
 
-    if (failCount >= this.banConfig.maxFailures) {
-      this.banMap.set(proxy, { bannedAt: now, failCount, lastFailure: now });
-      return true;
-    }
-
-    this.banMap.set(proxy, { bannedAt: 0, failCount, lastFailure: now });
-    return false;
+    this.banMap.set(proxy, { bannedAt, failCount, lastFailure: now, lastSeenFailure: now });
+    return bannedAt > 0;
   }
 
   /** Report a proxy success — resets its fail count. */
   reportSuccess(proxy: string): void {
+    if (this.banConfig === false) return;
+
+    const entry = this.banMap.get(proxy);
+    if (!entry || !this.forgivable(entry)) return;
     this.banMap.delete(proxy);
   }
 
@@ -225,26 +295,71 @@ export class ProxyManager {
 
     const key = `${proxy}::${scope}`;
     const now = Date.now();
-    const entry = this.scopedBanMap.get(key);
+    this.sweepScoped(now);
 
-    if (entry && (now - entry.lastFailure) < DEDUP_WINDOW) {
-      return entry.bannedAt > 0 && (now - entry.bannedAt) < this.banConfig.duration;
+    const existing = this.scopedBanMap.get(key);
+    const entry = existing && this.stale(existing, now) ? undefined : existing;
+
+    if (entry && (now - entry.lastFailure) < this.banConfig.dedupWindow) {
+      entry.lastSeenFailure = now;
+      return entry.bannedAt > 0;
     }
 
     const failCount = (entry?.failCount ?? 0) + 1;
+    const bannedAt = failCount >= this.banConfig.maxFailures ? now : 0;
 
-    if (failCount >= this.banConfig.maxFailures) {
-      this.scopedBanMap.set(key, { bannedAt: now, failCount, lastFailure: now });
-      return true;
-    }
-
-    this.scopedBanMap.set(key, { bannedAt: 0, failCount, lastFailure: now });
-    return false;
+    this.scopedBanMap.set(key, { bannedAt, failCount, lastFailure: now, lastSeenFailure: now });
+    return bannedAt > 0;
   }
 
   /** Report a scoped proxy success — resets its scoped fail count. */
   reportScopedSuccess(proxy: string, scope: string): void {
+    if (this.banConfig === false) return;
+    if (!this.banConfig.resetScopedOnSuccess) return;
+
+    const key = `${proxy}::${scope}`;
+    const entry = this.scopedBanMap.get(key);
+    if (!entry || !this.forgivable(entry)) return;
+
+    this.scopedBanMap.delete(key);
+  }
+
+  /**
+   * Drop a proxy's global ban and strikes outright.
+   *
+   * The deliberate counterpart to `reportSuccess`, which will not undo a ban that is still
+   * running. Use it when something other than a request answering 200 says the proxy is
+   * fine again — an operator, or a checker of your own.
+   */
+  clearBan(proxy: string): void {
+    this.banMap.delete(proxy);
+  }
+
+  /** The same for one scope. */
+  clearScopedBan(proxy: string, scope: string): void {
     this.scopedBanMap.delete(`${proxy}::${scope}`);
+  }
+
+  /**
+   * Whether a success is allowed to wipe this entry.
+   *
+   * Two things stop it. A ban that is still running outlives any success: the request that
+   * earned the ban and the ones that answer 200 right behind it are the same burst, so
+   * letting those clear it means a ban never survives the moment it was created. And a
+   * success inside the dedup window of a failure belongs to that same burst, so it says
+   * nothing about whether the proxy is welcome again — a target that rate-limits per IP
+   * answers some of a burst and refuses the rest.
+   */
+  private forgivable(entry: BanEntry): boolean {
+    if (this.banConfig === false) return true;
+
+    const now = Date.now();
+    if (entry.bannedAt > 0 && (now - entry.bannedAt) < this.banConfig.duration) return false;
+    // Deliberately the last failure seen rather than the last one counted: inside a burst
+    // the counted one stays put, and reading it would let a long burst age its own way out.
+    if ((now - entry.lastSeenFailure) < this.banConfig.dedupWindow) return false;
+
+    return true;
   }
 
   /** Check if a proxy is scoped-banned for a given scope. */
@@ -253,15 +368,15 @@ export class ProxyManager {
 
     const key = `${proxy}::${scope}`;
     const entry = this.scopedBanMap.get(key);
-    if (!entry || !entry.bannedAt) return false;
+    if (!entry) return false;
 
     const now = Date.now();
-    if (now - entry.bannedAt >= this.banConfig.duration) {
+    if (this.stale(entry, now)) {
       this.scopedBanMap.delete(key);
       return false;
     }
 
-    return true;
+    return entry.bannedAt > 0;
   }
 
   /** Replace the proxy list and clear all bans + country data. */

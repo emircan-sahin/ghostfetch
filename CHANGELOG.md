@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.5.3
+
+### Changed
+
+- **A success no longer clears a ban that is still running.** `reportSuccess` and
+  `reportScopedSuccess` deleted the whole entry, ban included. Under parallel load that is
+  the common case rather than an edge one: one request in a burst comes back 429 and bans
+  the proxy, the rest come back 200 a moment later and wipe the ban. A proxy went straight
+  back to the endpoint that had just rate-limited it, and `ban.duration` never meant
+  anything. Both are public methods, so anyone calling them to unban a proxy by hand wants
+  `clearBan` / `clearScopedBan` now.
+- **A success inside `dedupWindow` of a failure no longer clears the strikes.** It shares a
+  burst with that failure, so it is not evidence the proxy is welcome again — a target that
+  rate-limits per IP answers part of a burst and refuses the rest.
+
+### Fixed
+
+- **Waiting for a proxy reads every ban that blocks it.** `waitForProxy` sized its window
+  from the global ban map alone, so with every proxy sidelined for one scope and none
+  banned globally it found nothing to wait for and fell back to its own 5-minute default.
+  It now takes the longest ban on each proxy and waits for the first one to come free,
+  skipping proxies the `country` filter rules out.
+- **Strikes age out.** A proxy that failed once a month accumulated its way to a ban, since
+  nothing but a success ever cleared the count. Strikes are now dropped `duration` after the
+  last failure, on the write path as well as the read path — so a proxy coming back from a
+  ban has its full allowance again instead of being re-banned by its first stumble.
+- **The scoped ban map is swept.** Its keys pair a proxy with a target, so a client walking
+  many hosts grew it without bound; only the key being asked about was ever cleaned up.
+- **`undefined` in the ban config no longer overwrites a default.** `{ maxFailures: undefined }`
+  left every `failCount >= undefined` comparison false, which turned banning off silently —
+  an easy shape to build from optional env vars.
+
+### Added
+
+- `ban.resetScopedOnSuccess` (default `true`) — turn it off against targets that rate-limit
+  per IP per endpoint, where a proxy answering 200 between its 429s would otherwise never
+  reach `maxFailures`.
+- `ban.dedupWindow` (default `1000`) — how close together failures have to be to count as
+  one strike, and how close a success has to be to a failure to be ignored.
+- `proxyWaitTimeout` (config and per request) — longest a request will wait for a proxy
+  under `forceProxy`. Without it the choice is between leaving through your own IP and
+  blocking for the whole ban.
+- `ProxyManager.clearBan()` / `clearScopedBan()` — the deliberate way to put a proxy back,
+  now that a success will not undo a running ban.
+
 ## 0.5.2
 
 ### Fixed
