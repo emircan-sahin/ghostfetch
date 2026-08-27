@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- **CycleTLS was being handed the request timeout in the wrong unit, so Go never enforced
+  it.** Its per-request `timeout` is in seconds — the Go side builds its `http.Client` with
+  `time.Duration(timeout) * time.Second` — and it was receiving milliseconds. The default
+  `30000` therefore asked for a deadline of just over eight hours, leaving `withTimeout` as
+  the only thing that ever fired. That timer rejects the promise but cannot cancel the
+  request, so a target that accepted the connection and then stalled kept its socket, its
+  goroutine and its CycleTLS reply listener for as long as it liked, while the caller had
+  long since moved on. Requests observed running past two minutes against a 30s timeout
+  were this. The value is now converted, floored at one second because Go reads 0 as
+  "unset", and `withTimeout` waits `TIMEOUT_GRACE_MS` longer than Go so the deadline that
+  can actually close the socket is the one that fires first.
+
+  Go reports its own deadline as an HTTP 408 whose body begins `Request timeout: deadline
+  exceeded`, rather than by rejecting. Unhandled, that read as an ordinary response: the
+  caller was handed a 408 and the proxy was credited with a success. It now raises the same
+  `TimeoutError` the JS timer raises, which puts it back on the existing ambiguous path —
+  retried, with the proxy neither blamed nor cleared. A 408 that genuinely came from the
+  target is matched on its body and still passed through untouched.
+
 ## 0.6.0
 
 ### Added

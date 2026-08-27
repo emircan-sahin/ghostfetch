@@ -598,6 +598,22 @@ describe('timeout enforcement', () => {
     }
   });
 
+  it('lets Go enforce the deadline, not the JS backstop', async () => {
+    // CycleTLS reads `timeout` as seconds, so passing it milliseconds asks Go for a deadline
+    // in the hours and leaves `withTimeout` as the only one that fires — which stops the wait
+    // without closing the socket. Go now runs out first, TIMEOUT_GRACE_MS before the backstop
+    // does, and this measures that: the bug puts the elapsed time at the backstop instead.
+    const start = Date.now();
+    try {
+      await client.get(u('/hang'), { timeout: 5000, retry: { delays: [] } });
+      expect.unreachable('should have thrown');
+    } catch {
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeGreaterThanOrEqual(4500);
+      expect(elapsed).toBeLessThan(6500);
+    }
+  });
+
   it('timeout error is classified as ambiguous (proxy not penalized)', async () => {
     try {
       await client.get(u('/hang'), { timeout: 10 });

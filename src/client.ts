@@ -62,6 +62,16 @@ type Verdict =
   | { kind: 'retry'; error: GhostFetchRequestError; honourRetryAfter: boolean };
 
 const DEFAULT_TIMEOUT = 30000;
+
+/**
+ * How much longer than the Go deadline `withTimeout` waits before giving up itself.
+ *
+ * Go is the deadline that can actually end a request — it closes the socket. `withTimeout`
+ * only stops waiting, so if it fires first the socket, its goroutine and CycleTLS' reply
+ * listener all stay alive. Letting Go go first turns the JS timer back into what its comment
+ * says it is: the backstop for a transport that has stopped answering at all.
+ */
+const TIMEOUT_GRACE_MS = 2000;
 const HEALTH_BATCH_CONCURRENCY = 10;
 const HEALTH_RETRY_DELAYS = [0, 3000]; // 2 attempts: immediate, then +3s
 const DEFAULT_HEALTH_URL = 'https://ipinfo.io/json';
@@ -732,7 +742,7 @@ export class GhostFetch {
 
     const cycleTLSOptions: CycleTLSRequestOptions = {
       headers,
-      timeout,
+      timeout: timeoutSeconds(timeout),
       // CycleTLS defaults to 'json', which parses the body and forces a re-stringify —
       // that loses the raw bytes (formatting, big-number precision). Ask for the raw
       // bytes instead so text stays verbatim and binary payloads survive intact.
@@ -771,8 +781,16 @@ export class GhostFetch {
 
     const response = await this.withTransport((c) => {
       const methodFn = c[method.toLowerCase() as 'get' | 'post' | 'put' | 'delete' | 'patch' | 'head' | 'options'];
-      return withTimeout(methodFn(url, cycleTLSOptions), timeout);
+      return withTimeout(methodFn(url, cycleTLSOptions), timeout + TIMEOUT_GRACE_MS);
     }, client);
+
+    // Go reports its own deadline as a 408 carrying GO_TIMEOUT_BODY, rather than by rejecting.
+    // Left alone that reads as an ordinary response: the caller is handed a 408 and the proxy is
+    // credited with a success. Raising the same error the JS timer raises puts it back on the
+    // path that already treats a timeout as ambiguous — retried, proxy neither blamed nor cleared.
+    if (isGoTimeout(response)) {
+      throw new TimeoutError(timeout);
+    }
 
     const { headers: responseHeaders, setCookie } = normalizeHeaders(response.headers);
 
@@ -870,14 +888,14 @@ export class GhostFetch {
                 this.withTransport((c) =>
                   c.get(url, {
                     proxy,
-                    timeout,
+                    timeout: timeoutSeconds(timeout),
                     headers: {},
                     // Same reasoning as executeRequest: take the raw bytes and decode
                     // them ourselves rather than letting CycleTLS parse and re-serialize
                     responseType: 'arraybuffer',
                   }),
                 ),
-                timeout,
+                timeout + TIMEOUT_GRACE_MS,
               );
 
               const { headers: resHeaders } = normalizeHeaders(res.headers);
@@ -1109,6 +1127,33 @@ class TimeoutError extends Error {
     super(`Request timeout after ${ms}ms`);
     this.name = 'TimeoutError';
   }
+}
+
+/**
+ * How CycleTLS words the Go-side deadline it reports as a 408 body. Matched rather than keying
+ * on the status alone so a 408 that genuinely came from the target is still passed through.
+ */
+const GO_TIMEOUT_BODY = 'Request timeout: deadline exceeded';
+
+/** Whether a response is CycleTLS reporting Go's deadline rather than the target answering. */
+function isGoTimeout(response: { status: number; data?: unknown }): boolean {
+  return (
+    response.status === 408 &&
+    typeof response.data === 'string' &&
+    response.data.startsWith(GO_TIMEOUT_BODY)
+  );
+}
+
+/**
+ * CycleTLS' per-request `timeout` is in **seconds**: the Go side builds its `http.Client` with
+ * `time.Duration(timeout) * time.Second`. Handing it milliseconds asks for a deadline in the
+ * hours, which is the same as having none — verified against the shipped binary, and by asking
+ * a five-second endpoint to answer within `timeout: 2` and watching it give up at 2.0s.
+ *
+ * Rounded up and floored at one second: Go reads 0 as "unset" and substitutes its own default.
+ */
+function timeoutSeconds(ms: number): number {
+  return Math.max(1, Math.ceil(ms / 1000));
 }
 
 /** Enforce a JS-level timeout on any Promise. CycleTLS passes timeout to Go but doesn't enforce it client-side. */
