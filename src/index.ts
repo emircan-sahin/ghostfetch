@@ -2,6 +2,7 @@ export { GhostFetch } from './client';
 export { ProxyManager } from './proxy-manager';
 export { Session } from './session';
 export { CookieJar } from './cookies';
+export { routeScope } from './scope';
 export {
   GhostFetchRequestError,
   CloudflareJSChallengeError,

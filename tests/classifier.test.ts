@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { classifyError, isCloudflareChallenge, checkInterceptors, checkDefaultRetryStatus } from '../src/classifier';
 import { GhostFetchResponse } from '../src/types';
+import { GhostFetchRequestError } from '../src/errors';
 
 function res(partial: Partial<GhostFetchResponse>): GhostFetchResponse {
   return {
@@ -17,6 +18,13 @@ function res(partial: Partial<GhostFetchResponse>): GhostFetchResponse {
 }
 
 describe('classifyError', () => {
+  it('keeps the type an already-classified error carries', () => {
+    // A TLS handshake EOF names neither proxy nor timeout; keyword matching would call it
+    // a server error and credit the proxy that dropped it
+    const handshake = new GhostFetchRequestError({ type: 'ambiguous', message: 'uTlsConn.Handshake() error: EOF' });
+    expect(classifyError(handshake)).toBe('ambiguous');
+  });
+
   it('treats connection-level codes as proxy failures', () => {
     for (const code of ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE']) {
       expect(classifyError({ code })).toBe('proxy');

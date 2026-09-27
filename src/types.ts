@@ -213,20 +213,27 @@ export interface BanConfig {
   duration?: number;
 
   /**
-   * Extract a scope key from a URL for scoped bans.
-   * When set, 'scopedBan' interceptor action bans a proxy only for URLs
-   * that produce the same scope key.
+   * Extract a scope key from a URL for scoped bans. A scoped ban sidelines a proxy only for
+   * URLs that produce the same key.
    *
-   * @default extracts hostname (e.g. 'web3.okx.com')
+   * @default `routeScope` — host plus path with ids collapsed, so
+   * `https://api.site.com/rug/<mint>?x=1` scopes to `api.site.com/rug/*`
    *
    * @example
-   * // Ban per hostname (default)
-   * scopeKey: (url) => new URL(url).hostname
-   *
-   * // Ban per path prefix
-   * scopeKey: (url) => { const u = new URL(url); return `${u.hostname}${u.pathname.split('/').slice(0, 3).join('/')}`; }
+   * // Ban per host instead
+   * scopeKey: (url) => new URL(url).host
    */
   scopeKey?: (url: string) => string;
+
+  /**
+   * Scoped strikes before a proxy is banned for that scope (default: 1).
+   *
+   * Separate from `maxFailures` because the cost is not the same: a scoped ban takes one
+   * proxy off one route, and the rest of the pool is still there to serve it. Waiting for a
+   * second strike means a caller pays for the proxy's next failure too — a request that times
+   * out, retries, and times out again on the same route.
+   */
+  scopedMaxFailures?: number;
 
   /**
    * How close together failures have to be to count as one strike (default: 1000).

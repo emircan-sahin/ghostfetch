@@ -43,7 +43,7 @@ const client = new GhostFetch(config?);
 | `healthCheck` | `false \| { url?, timeout? }` | ipinfo.io, 10s | Startup probe. `false` skips it |
 | `timeout` | `number` | `30000` | Per-request timeout in ms |
 | `retry` | `RetryConfig` | see [Retry](#retry) | |
-| `ban` | `BanConfig \| false` | `{ maxFailures: 3, duration: 3600000, dedupWindow: 1000, resetScopedOnSuccess: true }` | `false` disables banning |
+| `ban` | `BanConfig \| false` | `{ maxFailures: 3, scopedMaxFailures: 1, duration: 3600000, dedupWindow: 1000, resetScopedOnSuccess: true }` | `false` disables banning |
 | `forceProxy` | `boolean` | `false` | Wait for a proxy instead of going direct |
 | `proxyWaitTimeout` | `number` | — | Longest a request waits for a proxy. Uncapped by default |
 | `maxConcurrentPerProxy` | `number` | `0` (off) | Most requests in flight through one proxy. See [Concurrency](#concurrency) |
@@ -203,9 +203,16 @@ kept — a provider outage should not leave you with nothing.
 |---|---|---|
 | `proxy` | `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `EHOSTUNREACH`, `ENETUNREACH`, `EPIPE`; "proxy"/"tunnel" in the message | Fail count +1 |
 | `server` | An HTTP response arrived | Fail count reset, unless a ban is running or a failure landed inside `dedupWindow` |
-| `ambiguous` | `ETIMEDOUT`, `ECONNRESET`, `ECONNABORTED`, "socket hang up", "timeout" | Untouched |
+| `ambiguous` | `ETIMEDOUT`, `ECONNRESET`, `ECONNABORTED`, "socket hang up", "timeout" | Global record untouched; banned off the route it failed on ([Route bans](#route-bans)) |
 
 Unknown errors default to `server`, which keeps proxies in the pool.
+
+CycleTLS reports some transport failures as responses rather than rejections — a proxy
+refusing the CONNECT (`407`, `502`, `503`), a TLS handshake dying in the tunnel (`495`), a
+connection dropped before any answer (status `0`), all with a body starting `Request
+returned a Syscall Error:` or empty. None of them came from the target, so none of them
+reach interceptors or the default statuses: a refused CONNECT is a `proxy` failure, the
+rest are `ambiguous`.
 
 ### Banning
 
@@ -228,10 +235,10 @@ earned:
   burst with that failure, so it says nothing about whether the proxy is welcome again —
   a target that rate-limits per IP answers part of a burst and refuses the rest.
 
-Against a target that rate-limits **per IP per endpoint** even that is too forgiving: the
-proxy keeps answering 200 between its 429s, never reaches `maxFailures`, and stays in
-rotation on the one endpoint pushing back — which is how a 429 turns into a real block.
-Turn the forgiveness off for that case:
+With `scopedMaxFailures` raised above `1`, a target that rate-limits **per IP per
+endpoint** makes even that too forgiving: the proxy keeps answering 200 between its 429s,
+never reaches the threshold, and stays in rotation on the one endpoint pushing back —
+which is how a 429 turns into a real block. Turn the forgiveness off for that case:
 
 ```ts
 new GhostFetch({ ban: { resetScopedOnSuccess: false } });
@@ -242,19 +249,45 @@ banned proxy comes back with a clean slate once its ban lapses, and strikes that
 reached a ban are dropped the same length of time after the last failure. Raising
 `duration` lengthens both.
 
-**Scoped bans** sideline a proxy for one site instead of everywhere — useful when one
-target blocks an IP that every other target still accepts:
+**Scoped bans** sideline a proxy for one route instead of everywhere — useful when a
+target refuses an IP on one endpoint that every other endpoint still accepts:
 
 ```ts
-new GhostFetch({
-  ban: { scopeKey: (url) => new URL(url).hostname },   // this is the default
-});
 client.addInterceptor({
   name: 'okx',
   match: (url) => url.includes('okx.com'),
   check: (res) => (res.status === 403 ? 'scopedBan' : null),
 });
 ```
+
+The scope is the URL's **route**: host plus path, ids collapsed to `*`, query dropped.
+`https://api.site.com/rug/<mint>?t=1` and `https://api.site.com/rug/<other-mint>` are both
+`api.site.com/rug/*`, so a proxy banned on one token is banned on every token of that
+route. Numeric ids, `0x` addresses, UUIDs and long opaque tokens (base58, base64url,
+hashes) count as ids; route words like `ranking-list` do not. The function is exported as
+`routeScope`; pass your own `scopeKey` to scope differently:
+
+```ts
+new GhostFetch({ ban: { scopeKey: (url) => new URL(url).host } });   // per host instead
+```
+
+A scoped ban lands on the **first** scoped strike (`scopedMaxFailures`, default `1`). It
+costs one proxy on one route while the rest of the pool keeps serving it, and every strike
+waited for is another request that times out on the same exit.
+
+### Route bans
+
+Transport failures ban the proxy off the route they happened on, with no interceptor
+involved: a timeout, a dropped tunnel, a TLS handshake that died, a refused CONNECT. This
+is what catches a **degraded** exit — one that answers 98 requests in 100 and stalls on
+the rest. It never strings two failures together, so `maxFailures` never bans it, while
+every stall costs the caller the full timeout plus a retry.
+
+A timeout cannot tell a bad exit from a target that is down for everyone, and there every
+proxy fails in turn. So these bans are **guarded**: one only lands while at least half of
+the usable pool stays open on the route. Past that, the failures are the route's, not the
+proxies', and the rest of the pool is left alone. An interceptor's `'scopedBan'` is not
+guarded — that is a decision about the response, not a guess about the proxy.
 
 ### Selection
 
@@ -382,7 +415,7 @@ await client.get(url, { interceptor: { check: (res) => (res.status === 401 ? 'sk
 |---|---|---|
 | `'retry'` | yes | not penalised |
 | `'ban'` | yes | fail count +1, globally |
-| `'scopedBan'` | yes | fail count +1, for this URL scope only |
+| `'scopedBan'` | yes | fail count +1, for this route only |
 | `'skip'` | no | not penalised |
 | `null` | falls through | — |
 

@@ -14,7 +14,9 @@ import { GhostFetchRequestError, CloudflareJSChallengeError, NoProxyAvailableErr
 import { getBrowserProfile } from './presets';
 import { decompress } from './decompress';
 import { Session } from './session';
+import { routeScope } from './scope';
 import {
+  ErrorType,
   GhostFetchConfig,
   GhostFetchResponse,
   HealthCheckResult,
@@ -413,7 +415,7 @@ export class GhostFetch {
     if (banConfig && typeof banConfig === 'object' && banConfig.scopeKey) {
       return banConfig.scopeKey(url);
     }
-    try { return new URL(url).hostname; } catch { return url; }
+    return routeScope(url);
   }
 
   /**
@@ -516,7 +518,7 @@ export class GhostFetch {
         if (error instanceof CloudflareJSChallengeError) throw error;
         if (error instanceof InterceptorError) throw error;
 
-        lastError = this.recordTransportFailure(error, proxy);
+        lastError = this.recordTransportFailure(error, proxy, scope);
         lastFailedProxy = proxy;
       } finally {
         // Released before the backoff sleep, not after the loop: a request waiting out a
@@ -611,15 +613,22 @@ export class GhostFetch {
 
   /**
    * Turn a thrown error into a retryable one, crediting or blaming the proxy.
-   * 'ambiguous' errors (timeouts, resets) leave the proxy's record untouched — they
-   * are as likely to be the target's fault as the proxy's.
+   *
+   * 'ambiguous' errors (timeouts, resets) leave the global record untouched — one route
+   * stalling says little about the proxy everywhere else. On the route itself they are the
+   * clearest signal there is: an exit IP that stalls mid-body answers 98 requests in 100 and
+   * times out on the rest, so it never strings two failures together for a global ban, and
+   * every stall costs the caller the whole timeout plus a retry. It is banned off the route on
+   * the spot instead, guarded so a target that is down for everyone cannot empty the pool.
    */
-  private recordTransportFailure(error: unknown, proxy: string | null): GhostFetchRequestError {
+  private recordTransportFailure(error: unknown, proxy: string | null, scope: string): GhostFetchRequestError {
     const errorType = classifyError(error);
 
     if (proxy) {
       if (errorType === 'proxy') this.proxyManager.reportFailure(proxy);
       else if (errorType === 'server') this.proxyManager.reportSuccess(proxy);
+
+      if (errorType !== 'server') this.proxyManager.reportScopedFailure(proxy, scope, { guarded: true });
     }
 
     if (error instanceof GhostFetchRequestError) return error;
@@ -790,6 +799,16 @@ export class GhostFetch {
     // path that already treats a timeout as ambiguous — retried, proxy neither blamed nor cleared.
     if (isGoTimeout(response)) {
       throw new TimeoutError(timeout);
+    }
+
+    // The same trick for every other transport failure: CycleTLS hands back a proxy's refused
+    // CONNECT, a TLS handshake that died in the tunnel, or a connection dropped before any
+    // answer, as a response with a made-up status (407, 502, 503, 495, 0). Judged as a
+    // response, a proxy's own 503 read as the target being busy and a dropped tunnel as a
+    // success — retried or returned, and the proxy credited either way.
+    const transportFailure = readTransportFailure(response);
+    if (transportFailure) {
+      throw new GhostFetchRequestError({ ...transportFailure, proxy: proxy ?? undefined });
     }
 
     const { headers: responseHeaders, setCookie } = normalizeHeaders(response.headers);
@@ -1134,6 +1153,39 @@ class TimeoutError extends Error {
  * on the status alone so a 408 that genuinely came from the target is still passed through.
  */
 const GO_TIMEOUT_BODY = 'Request timeout: deadline exceeded';
+
+/**
+ * How CycleTLS words a request that failed below HTTP — the proxy, the tunnel or the TLS
+ * handshake — and that it reports as a response anyway. Measured in production: every 407,
+ * 495, 502 and 503 seen through a residential pool over four days carried this body, and not
+ * one of them came from the target.
+ */
+const SYSCALL_ERROR_BODY = 'Request returned a Syscall Error: ';
+
+/** The proxy answered the CONNECT with something other than 200: it never reached the target. */
+const PROXY_REFUSED = /Proxy responded with non 200 code/;
+
+/**
+ * The transport failure CycleTLS is reporting as a response, or null when the response really
+ * came from the target. Status 0 is no response at all — measured: a tunnel torn down after
+ * the request went out comes back as status 0 with the body `->` and nothing else.
+ */
+function readTransportFailure(response: { status: number; data?: unknown }): { type: ErrorType; message: string } | null {
+  const body = typeof response.data === 'string' ? response.data : '';
+
+  if (body.startsWith(SYSCALL_ERROR_BODY)) {
+    // CycleTLS repeats the cause after `->`; the first half already carries it.
+    const message = body.split('->')[0].trim();
+    return { type: PROXY_REFUSED.test(message) ? 'proxy' : 'ambiguous', message };
+  }
+
+  if (response.status === 0) {
+    const cause = body.replace('->', '').trim();
+    return { type: 'ambiguous', message: `Connection closed before a response${cause ? `: ${cause}` : ''}` };
+  }
+
+  return null;
+}
 
 /** Whether a response is CycleTLS reporting Go's deadline rather than the target answering. */
 function isGoTimeout(response: { status: number; data?: unknown }): boolean {

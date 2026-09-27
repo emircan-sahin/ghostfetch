@@ -1,5 +1,5 @@
 import { ErrorType, GhostFetchResponse, Interceptor, InterceptorAction } from './types';
-import { InterceptorError } from './errors';
+import { GhostFetchRequestError, InterceptorError } from './errors';
 
 /** Error codes that are definitely proxy/network failures — request never reached the server. */
 const PROXY_ERROR_CODES = new Set([
@@ -60,9 +60,14 @@ const DEFAULT_RETRY_STATUSES: Record<number, ErrorType> = {
  *
  * - proxy:     request definitely never reached the server (DNS fail, connection refused, etc.)
  * - server:    an HTTP response was received — the proxy worked fine
- * - ambiguous: could be either (timeout, connection reset) — proxy should NOT be penalized
+ * - ambiguous: could be either (timeout, connection reset) — no global strike, but a guarded
+ *              strike on the route it failed on
  */
 export function classifyError(error: unknown): ErrorType {
+  // Already classified where the failure was recognised — keyword matching on its message
+  // would only get a worse answer (a TLS handshake EOF names neither proxy nor timeout).
+  if (error instanceof GhostFetchRequestError) return error.type;
+
   if (error && typeof error === 'object') {
     const err = error as Record<string, unknown>;
 

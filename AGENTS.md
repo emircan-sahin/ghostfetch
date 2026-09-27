@@ -12,7 +12,7 @@ Windsurf and Cline read it directly; Claude Code does not, so `CLAUDE.md` is a o
 ```bash
 pnpm install
 pnpm build          # CJS + ESM + types
-pnpm test           # vitest, 229 tests
+pnpm test           # vitest, 248 tests
 pnpm test:coverage
 ```
 
@@ -28,6 +28,7 @@ considered done. Live-network tests are skipped when `CI` is set unless `GHOSTFE
 | `src/session.ts` | Sticky-proxy + cookie-jar session |
 | `src/cookies.ts` | `CookieJar` — parsing, scoping, security rules |
 | `src/classifier.ts` | Error classification, Cloudflare detection, interceptor dispatch |
+| `src/scope.ts` | `routeScope` — the default ban scope, ids collapsed to `*` |
 | `src/decompress.ts` | gzip/deflate/br/zstd with a size ceiling |
 | `src/presets.ts` | Browser identity profiles |
 | `src/retry.ts` | Delay schedules, jitter, `Retry-After` parsing |
@@ -149,6 +150,24 @@ retires that proxy from rotation for good — silently, because the pool still r
 as healthy.
 
 Guarded by `tests/proxy-concurrency.test.ts`.
+
+### Transport failures CycleTLS reports as responses
+
+`readTransportFailure` turns them back into errors before `judge` sees them: a body starting
+`Request returned a Syscall Error:` (a refused CONNECT, a TLS handshake that died in the
+tunnel) and status `0` (no response at all — a dropped tunnel comes back as `0` with the body
+`->`). Judged as responses they read as the target answering — a proxy's own 503 was retried
+as "target busy" and the proxy credited, a dropped tunnel was returned as a success. Matched
+on the body, like `isGoTimeout`, so a real 503 from the target still reaches interceptors.
+
+### Guarded route bans keep half the pool
+
+`recordTransportFailure` bans a proxy off the route on any non-`server` failure, with
+`guarded: true`. The guard (`canSpare`) is not optional: a timeout cannot tell a bad exit from
+a target that is down, and without it a route outage bans the whole pool off that route in
+seconds. `'scopedBan'` from an interceptor is deliberately unguarded.
+
+Guarded by the `route bans` block in `tests/proxy-integration.test.ts`.
 
 ### Leases are taken at selection, not after it
 

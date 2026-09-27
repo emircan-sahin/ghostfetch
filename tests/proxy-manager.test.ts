@@ -43,7 +43,7 @@ describe('ProxyManager — scoped bans', () => {
   });
 
   it('reportScopedSuccess resets the scope fail counter once the burst has passed', async () => {
-    const pm = new ProxyManager([A], { maxFailures: 2, duration: 60000, dedupWindow: 20 });
+    const pm = new ProxyManager([A], { scopedMaxFailures: 2, duration: 60000, dedupWindow: 20 });
 
     // One failure — not banned yet
     expect(pm.reportScopedFailure(A, 'okx.com')).toBe(false);
@@ -171,4 +171,64 @@ describe('ProxyManager — waitForProxy', () => {
 
     await expect(pm.waitForProxy()).resolves.toBe(A);
   }, 15000);
+});
+
+describe('ProxyManager — scoped threshold and the half-pool guard', () => {
+  const C = 'http://user:pass@host-c.com:8001';
+  const D = 'http://user:pass@host-d.com:8001';
+  const ROUTE = 'api.site.com/rug/*';
+
+  it('bans off a scope on the first failure by default', () => {
+    const pm = new ProxyManager([A, B]);
+
+    expect(pm.reportScopedFailure(A, ROUTE)).toBe(true);
+    expect(pm.isUsable(A, { scope: ROUTE })).toBe(false);
+    // A scoped ban is exactly that — the proxy keeps serving every other route
+    expect(pm.isUsable(A, { scope: 'api.site.com/ok' })).toBe(true);
+  });
+
+  it('counts scoped strikes against scopedMaxFailures, not maxFailures', () => {
+    const pm = new ProxyManager([A, B], { maxFailures: 1, scopedMaxFailures: 2, dedupWindow: 0 });
+
+    expect(pm.reportScopedFailure(A, ROUTE)).toBe(false);
+    expect(pm.reportScopedFailure(A, ROUTE)).toBe(true);
+  });
+
+  it('stops a guarded ban once half the pool is out on the scope', () => {
+    const pm = new ProxyManager([A, B, C, D], { dedupWindow: 0 });
+
+    // A target that is down for everyone fails every proxy in turn
+    expect(pm.reportScopedFailure(A, ROUTE, { guarded: true })).toBe(true);
+    expect(pm.reportScopedFailure(B, ROUTE, { guarded: true })).toBe(true);
+    expect(pm.reportScopedFailure(C, ROUTE, { guarded: true })).toBe(false);
+    expect(pm.reportScopedFailure(D, ROUTE, { guarded: true })).toBe(false);
+
+    expect(pm.status({ scope: ROUTE }).usable).toBe(2);
+  });
+
+  it('never takes the last usable proxy off a scope on its own', () => {
+    const pm = new ProxyManager([A], { dedupWindow: 0 });
+
+    expect(pm.reportScopedFailure(A, ROUTE, { guarded: true })).toBe(false);
+    expect(pm.isUsable(A, { scope: ROUTE })).toBe(true);
+  });
+
+  it('measures the half against the usable pool, not the configured one', () => {
+    const pm = new ProxyManager([A, B, C, D], { maxFailures: 1, dedupWindow: 0 });
+    pm.reportFailure(C);
+    pm.reportFailure(D);
+
+    // Two usable: banning one leaves one, which is half — allowed. The second is not.
+    expect(pm.reportScopedFailure(A, ROUTE, { guarded: true })).toBe(true);
+    expect(pm.reportScopedFailure(B, ROUTE, { guarded: true })).toBe(false);
+  });
+
+  it('leaves an interceptor-named scopedBan unguarded', () => {
+    const pm = new ProxyManager([A, B], { dedupWindow: 0 });
+
+    // The caller looked at the response and decided — that is not a guess to second-guess
+    expect(pm.reportScopedFailure(A, ROUTE)).toBe(true);
+    expect(pm.reportScopedFailure(B, ROUTE)).toBe(true);
+    expect(pm.status({ scope: ROUTE }).usable).toBe(0);
+  });
 });

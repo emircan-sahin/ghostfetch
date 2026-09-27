@@ -222,7 +222,7 @@ client.addInterceptor({
 |---|---|---|
 | `'retry'` | yes | none |
 | `'ban'` | yes | fail count +1, everywhere |
-| `'scopedBan'` | yes | fail count +1, for this site only |
+| `'scopedBan'` | yes | banned for this route only (`/rug/*`, not every URL) |
 | `'skip'` | no, returns the response | none |
 | `null` | falls through to default handling | — |
 

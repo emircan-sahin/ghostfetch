@@ -36,6 +36,7 @@ function defined<T extends object>(source: T | undefined): Partial<T> {
 
 const DEFAULT_BAN: Required<Omit<BanConfig, 'scopeKey'>> = {
   maxFailures: 3,
+  scopedMaxFailures: 1,
   duration: 60 * 60 * 1000, // 1 hour
   dedupWindow: DEDUP_WINDOW,
   resetScopedOnSuccess: true,
@@ -432,9 +433,16 @@ export class ProxyManager {
 
   /**
    * Report a scoped proxy failure. Returns true if the proxy got scoped-banned.
-   * Proxy is banned only for the given scope (e.g. hostname), not globally.
+   * Proxy is banned only for the given scope (a route, by default), not globally.
+   *
+   * `guarded` is for failures ghostfetch attributes to the proxy on its own — a timeout, a
+   * dropped tunnel — rather than ones an interceptor named. Those cannot tell a bad exit IP
+   * from a target that is down for everyone, and when it is the target every proxy fails in
+   * turn: unguarded, the whole pool would be banned off the route within seconds. So a guarded
+   * failure only bans while at least half of the usable pool stays open on the scope. An
+   * outlier is a minority by definition; past half, the problem is the route, not the proxy.
    */
-  reportScopedFailure(proxy: string, scope: string): boolean {
+  reportScopedFailure(proxy: string, scope: string, opts?: { guarded?: boolean }): boolean {
     if (this.banConfig === false) return false;
 
     const key = `${proxy}::${scope}`;
@@ -450,10 +458,18 @@ export class ProxyManager {
     }
 
     const failCount = (entry?.failCount ?? 0) + 1;
-    const bannedAt = failCount >= this.banConfig.maxFailures ? now : 0;
+    const struckOut = failCount >= this.banConfig.scopedMaxFailures;
+    const bannedAt = struckOut && (!opts?.guarded || this.canSpare(proxy, scope)) ? now : 0;
 
     this.scopedBanMap.set(key, { bannedAt, failCount, lastFailure: now, lastSeenFailure: now });
     return bannedAt > 0;
+  }
+
+  /** Whether banning `proxy` off `scope` still leaves at least half the usable pool on it. */
+  private canSpare(proxy: string, scope: string): boolean {
+    const usable = this.getAvailableProxies();
+    const remaining = usable.filter((p) => p !== proxy && !this.isScopedBanned(p, scope)).length;
+    return remaining >= Math.ceil(usable.length / 2);
   }
 
   /** Report a scoped proxy success — resets its scoped fail count. */

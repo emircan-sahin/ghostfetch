@@ -236,7 +236,7 @@ describe('GhostFetch — poolStatus', () => {
 
     try {
       const manager = client['proxyManager'];
-      expect(manager.reportScopedFailure(A, 'example.com')).toBe(true);
+      expect(manager.reportScopedFailure(A, 'example.com/page')).toBe(true);
 
       expect(client.poolStatus('https://example.com/page')).toEqual({
         total: 2,

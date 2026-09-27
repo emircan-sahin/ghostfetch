@@ -40,7 +40,7 @@ describe('ProxyManager — a success must not undo a ban', () => {
   });
 
   it('does not let a success in the same burst forgive a strike', async () => {
-    const pm = new ProxyManager([A, B], { maxFailures: 2, duration: 60000, dedupWindow: 200 });
+    const pm = new ProxyManager([A, B], { maxFailures: 2, scopedMaxFailures: 2, duration: 60000, dedupWindow: 200 });
 
     expect(pm.reportScopedFailure(A, SCOPE)).toBe(false); // strike 1
     pm.reportScopedSuccess(A, SCOPE); // same burst — says nothing about the proxy
@@ -50,7 +50,7 @@ describe('ProxyManager — a success must not undo a ban', () => {
   });
 
   it('still forgives a strike once the proxy has been clean for a while', async () => {
-    const pm = new ProxyManager([A, B], { maxFailures: 2, duration: 60000, dedupWindow: 50 });
+    const pm = new ProxyManager([A, B], { maxFailures: 2, scopedMaxFailures: 2, duration: 60000, dedupWindow: 50 });
 
     expect(pm.reportScopedFailure(A, SCOPE)).toBe(false); // strike 1
 
@@ -64,6 +64,7 @@ describe('ProxyManager — a success must not undo a ban', () => {
   it('never forgives a strike when resetScopedOnSuccess is off', async () => {
     const pm = new ProxyManager([A, B], {
       maxFailures: 2,
+      scopedMaxFailures: 2,
       duration: 60000,
       dedupWindow: 50,
       resetScopedOnSuccess: false,
@@ -96,7 +97,7 @@ describe('ProxyManager — a success must not undo a ban', () => {
   });
 
   it('honours a custom dedupWindow when counting strikes', async () => {
-    const pm = new ProxyManager([A, B], { maxFailures: 2, duration: 60000, dedupWindow: 300 });
+    const pm = new ProxyManager([A, B], { maxFailures: 2, scopedMaxFailures: 2, duration: 60000, dedupWindow: 300 });
 
     expect(pm.reportScopedFailure(A, SCOPE)).toBe(false);
     await sleep(50);
@@ -143,7 +144,7 @@ describe('ProxyManager — strikes age out', () => {
   it('does not carry stale strikes into a fresh incident', async () => {
     // duration doubles as the strike window: a proxy that has been quiet for that long
     // starts over, instead of coming back from a ban with no allowance left.
-    const pm = new ProxyManager([A, B], { maxFailures: 2, duration: 80, dedupWindow: 10 });
+    const pm = new ProxyManager([A, B], { maxFailures: 2, scopedMaxFailures: 2, duration: 80, dedupWindow: 10 });
 
     expect(pm.reportScopedFailure(A, SCOPE)).toBe(false); // strike 1
 
@@ -152,7 +153,7 @@ describe('ProxyManager — strikes age out', () => {
   });
 
   it('lets a proxy back with a full allowance after its ban lapses', async () => {
-    const pm = new ProxyManager([A, B], { maxFailures: 2, duration: 80, dedupWindow: 10 });
+    const pm = new ProxyManager([A, B], { maxFailures: 2, scopedMaxFailures: 2, duration: 80, dedupWindow: 10 });
 
     await sleep(15);
     expect(pm.reportFailure(A)).toBe(false);
@@ -264,7 +265,7 @@ describe('ProxyManager — a burst cannot age its own way out', () => {
     // The counted strike stays anchored at the first failure of a burst. Reading that
     // timestamp would let a long burst look old enough to forgive, even though a failure
     // landed a moment ago.
-    const pm = new ProxyManager([A, B], { maxFailures: 2, duration: 60000, dedupWindow: 100 });
+    const pm = new ProxyManager([A, B], { maxFailures: 2, scopedMaxFailures: 2, duration: 60000, dedupWindow: 100 });
 
     expect(pm.reportScopedFailure(A, SCOPE)).toBe(false); // strike 1, anchors the window
     await sleep(60);

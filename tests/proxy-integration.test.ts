@@ -55,10 +55,19 @@ const target = http.createServer((req, res) => {
 interface TestProxy {
   url: string;
   hits: number;
+  /** Tunnels torn down because they carried `dropPath`. */
+  drops: number;
   close: () => Promise<void>;
 }
 
-async function startProxy(host = '127.0.0.1'): Promise<TestProxy> {
+interface ProxyBehaviour {
+  /** Answer the CONNECT with this status instead of tunnelling — a proxy refusing us. */
+  refuseWith?: number;
+  /** Tear the tunnel down on any request for this path — an exit IP one route refuses. */
+  dropPath?: string;
+}
+
+async function startProxy(host = '127.0.0.1', behaviour: ProxyBehaviour = {}): Promise<TestProxy> {
   const server = http.createServer((_req, res) => {
     res.writeHead(400);
     res.end('this fixture only serves CONNECT');
@@ -67,6 +76,7 @@ async function startProxy(host = '127.0.0.1'): Promise<TestProxy> {
   const proxy: TestProxy = {
     url: '',
     hits: 0,
+    drops: 0,
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections?.();
@@ -76,12 +86,30 @@ async function startProxy(host = '127.0.0.1'): Promise<TestProxy> {
 
   server.on('connect', (req, socket, head) => {
     proxy.hits++;
+    if (behaviour.refuseWith) {
+      socket.end(`HTTP/1.1 ${behaviour.refuseWith} Refused\r\n\r\n`);
+      return;
+    }
     const [h, p] = req.url!.split(':');
     const upstream = net.connect(Number(p), h, () => {
       socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head?.length) upstream.write(head);
       upstream.pipe(socket);
-      socket.pipe(upstream);
+      // Checked per chunk, not per tunnel: the client keeps tunnels alive, so a later
+      // request for the refused route can arrive on one that served another route first.
+      // The target is plain http, so the request line is readable inside the tunnel.
+      socket.on('data', (chunk: Buffer) => {
+        if (behaviour.dropPath && chunk.toString('latin1').includes(` ${behaviour.dropPath}`)) {
+          proxy.drops++;
+          socket.destroy();
+          upstream.destroy();
+          return;
+        }
+        upstream.write(chunk);
+      });
+      // What `socket.pipe(upstream)` did on its own: without it a client that hangs up leaves
+      // the tunnel half-open, and `server.close()` waits on it forever.
+      socket.on('end', () => upstream.end());
     });
     upstream.on('error', () => socket.destroy());
     socket.on('error', () => upstream.destroy());
@@ -409,4 +437,100 @@ describe('health check cannot hang the client', () => {
 
     await client.destroy();
   }, 40000);
+});
+
+
+describe('route bans', () => {
+  const MINTS = [
+    '9chx7Xgtq9mkagFkZPbCJgqKsydHTc6ZDPYqzfMbpump',
+    '7tNGyzmx2RkL4PfsU4mWmJLTTsQRBbBq1Ns5K6fGpump',
+    '3N5imznFARN7MYo5cpv8mMCfPwsC769S9sYMbrcUpump',
+    '1222tmXyKYi83uhPA99wKfwhZc2Lc2GvoVmiCkh8pump',
+  ];
+
+  it('reads a refused CONNECT as a proxy failure, not as the target answering', async () => {
+    const refusing = await startProxy('127.0.0.1', { refuseWith: 503 });
+    const client = new GhostFetch({
+      proxies: [refusing.url],
+      healthCheck: false,
+      retry: { delays: [] },
+      ban: { maxFailures: 1, duration: 60000 },
+    });
+
+    try {
+      const error = await client.get(geo('/ok')).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(MaxRetriesExceededError);
+      const { lastError } = error as MaxRetriesExceededError;
+      // Before, this came back as a 503 from the target: retried as "server busy" and the
+      // proxy credited with a success it never had
+      expect(lastError.type).toBe('proxy');
+      expect(lastError.status).toBeUndefined();
+      expect(lastError.message).toContain('Proxy responded with non 200 code');
+      expect(client.stats.availableProxies).toBe(0);
+    } finally {
+      await client.destroy();
+      await refusing.close();
+    }
+  }, 30000);
+
+  it('bans an exit off the route it fails on and keeps it everywhere else', async () => {
+    const flaky = await startProxy('127.0.0.1', { dropPath: '/rug/' });
+    const client = new GhostFetch({
+      proxies: [flaky.url, proxyB.url],
+      healthCheck: false,
+      retry: { delays: [0] },
+      ban: { maxFailures: 1, duration: 60000 },
+    });
+
+    try {
+      // Pinned, so the failure is guaranteed to land on the flaky exit
+      await expect(client.get(geo(`/rug/${MINTS[0]}`), { proxy: flaky.url })).rejects.toBeInstanceOf(
+        MaxRetriesExceededError,
+      );
+      const dropsAfterBan = flaky.drops;
+      expect(dropsAfterBan).toBeGreaterThan(0);
+
+      // Banned for the whole route — a different token on it is the same scope
+      const onRoute = client.poolStatus(geo(`/rug/${MINTS[1]}`));
+      expect(onRoute.scopedBanned).toBe(1);
+      expect(onRoute.usable).toBe(1);
+
+      // ...so no request for any token on it goes near the flaky exit again
+      for (const mint of MINTS.slice(1)) {
+        const res = await client.get(geo(`/rug/${mint}`));
+        expect(res.status).toBe(200);
+      }
+      expect(flaky.drops).toBe(dropsAfterBan);
+
+      // A dropped tunnel says nothing about the exit's other routes, nor about it globally
+      expect(client.poolStatus(geo('/ok')).usable).toBe(2);
+      expect(client.stats.availableProxies).toBe(2);
+      const elsewhere = await client.get(geo('/ok'), { proxy: flaky.url });
+      expect(elsewhere.status).toBe(200);
+    } finally {
+      await client.destroy();
+      await flaky.close();
+    }
+  }, 60000);
+
+  it('cannot empty the pool on a route that is down for everyone', async () => {
+    const client = new GhostFetch({
+      proxies: [proxyA.url, proxyB.url],
+      healthCheck: false,
+      timeout: 1000,
+      retry: { delays: [0] },
+      ban: { maxFailures: 1, duration: 60000 },
+    });
+
+    try {
+      // Both attempts time out, one on each proxy
+      await expect(client.get(geo('/never-answers'))).rejects.toBeInstanceOf(MaxRetriesExceededError);
+
+      const status = client.poolStatus(geo('/never-answers'));
+      expect(status.scopedBanned).toBe(1);
+      expect(status.usable).toBe(1);
+    } finally {
+      await client.destroy();
+    }
+  }, 30000);
 });
