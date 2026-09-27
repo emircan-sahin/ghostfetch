@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.7.0
+
+### Changed
+
+- **Scoped bans are per route, not per host.** The default `scopeKey` is now `routeScope`:
+  host plus path, with ids collapsed to `*` and the query dropped, so
+  `api.site.com/rug/<mint>` scopes to `api.site.com/rug/*`. Per host, a proxy refused on one
+  endpoint was sidelined on every endpoint of that site; per full URL it would have been the
+  opposite — every token its own scope, and a proxy refused on one tried afresh on the next.
+  Pass `scopeKey: (url) => new URL(url).host` to keep scoping by host.
+- **A scoped ban lands on the first scoped strike.** New `scopedMaxFailures`, default `1`,
+  replaces `maxFailures` for scoped strikes. A scoped ban costs one proxy on one route while
+  the rest of the pool keeps serving it; every strike waited for is another caller paying a
+  timeout and a retry on the same exit. Set `scopedMaxFailures` to keep the old count.
+- **Transport failures ban the proxy off the route they happened on.** Timeouts, dropped
+  tunnels, dead TLS handshakes and refused CONNECTs used to leave the proxy's record alone
+  (or, for a refused CONNECT, count globally) — so an exit that answers 98 requests in 100
+  and stalls on the rest was never banned: it never strings two failures together, and each
+  stall cost its caller the full timeout plus a retry. Measured on a production pool: two
+  such exit IPs carried 72 of its 78 timeouts over two days, and took 2s per successful
+  request where the rest averaged 0.6s. They are now banned off the route on the
+  spot. These bans are guarded — one only lands while at least half the usable pool stays
+  open on the route — so a target that is down for everyone cannot empty the pool.
+  An interceptor's `'scopedBan'` is not guarded.
+
+### Fixed
+
+- **CycleTLS transport failures were judged as responses from the target.** It reports a
+  proxy refusing the CONNECT (`407`, `502`, `503`), a TLS handshake dying in the tunnel
+  (`495`) and a connection dropped before any answer (status `0`) as responses, not
+  rejections. Every 407, 495, 502 and 503 in four days of production traffic was one of
+  these; none came from the target. Judged as responses, a proxy's own 503 read as "target
+  busy" — retried, and the proxy credited with a success — a dropped tunnel was handed to
+  the caller as a status-0 success, and an interceptor that rotated on 495 cleared the
+  strikes of the proxy that caused it. They now raise before judging: a refused CONNECT as a
+  `proxy` failure, the rest as `ambiguous`.
+- **`classifyError` keeps the type of an error that already carries one.** A TLS handshake
+  EOF names neither proxy nor timeout, so keyword matching called it a server error.
+
+### Added
+
+- `routeScope(url)` is exported, for a custom `scopeKey` that builds on it.
+
 ## 0.6.1
 
 ### Fixed
