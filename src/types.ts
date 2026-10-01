@@ -297,7 +297,13 @@ export interface RequestInterceptor {
   check: (response: GhostFetchResponse) => InterceptorAction;
 }
 
-export type ErrorType = 'proxy' | 'server' | 'ambiguous';
+/**
+ * - `proxy`     — the proxy itself failed (refused, unreachable); counts toward a global ban
+ * - `server`    — a response arrived from the target
+ * - `ambiguous` — timeout or dropped connection; banned off the route only
+ * - `throttled` — the proxy provider answered 429: the exit is fine, so nothing is banned
+ */
+export type ErrorType = 'proxy' | 'server' | 'ambiguous' | 'throttled';
 
 export interface GhostFetchResponse {
   /** HTTP status code */

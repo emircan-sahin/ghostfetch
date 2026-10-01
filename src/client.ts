@@ -624,7 +624,9 @@ export class GhostFetch {
   private recordTransportFailure(error: unknown, proxy: string | null, scope: string): GhostFetchRequestError {
     const errorType = classifyError(error);
 
-    if (proxy) {
+    // A throttled attempt says nothing about this exit or this route: it is retried on another
+    // proxy with the record left as it was.
+    if (proxy && errorType !== 'throttled') {
       if (errorType === 'proxy') this.proxyManager.reportFailure(proxy);
       else if (errorType === 'server') this.proxyManager.reportSuccess(proxy);
 
@@ -1163,7 +1165,14 @@ const GO_TIMEOUT_BODY = 'Request timeout: deadline exceeded';
 const SYSCALL_ERROR_BODY = 'Request returned a Syscall Error: ';
 
 /** The proxy answered the CONNECT with something other than 200: it never reached the target. */
-const PROXY_REFUSED = /Proxy responded with non 200 code/;
+const PROXY_REFUSED = /Proxy responded with non 200 code: (\d{3})/;
+
+/**
+ * A 429 on the CONNECT is the provider throttling the account, not one exit failing. Measured
+ * on a 40-entry pool: every port got it within the same minute while the same ports kept
+ * serving 200s, and banning on it emptied the pool for the full ban duration each time.
+ */
+const PROVIDER_THROTTLED = 429;
 
 /**
  * The transport failure CycleTLS is reporting as a response, or null when the response really
@@ -1176,7 +1185,9 @@ function readTransportFailure(response: { status: number; data?: unknown }): { t
   if (body.startsWith(SYSCALL_ERROR_BODY)) {
     // CycleTLS repeats the cause after `->`; the first half already carries it.
     const message = body.split('->')[0].trim();
-    return { type: PROXY_REFUSED.test(message) ? 'proxy' : 'ambiguous', message };
+    const refused = PROXY_REFUSED.exec(message);
+    if (!refused) return { type: 'ambiguous', message };
+    return { type: Number(refused[1]) === PROVIDER_THROTTLED ? 'throttled' : 'proxy', message };
   }
 
   if (response.status === 0) {

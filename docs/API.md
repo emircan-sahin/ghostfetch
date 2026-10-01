@@ -204,6 +204,7 @@ kept — a provider outage should not leave you with nothing.
 | `proxy` | `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `EHOSTUNREACH`, `ENETUNREACH`, `EPIPE`; "proxy"/"tunnel" in the message | Fail count +1 |
 | `server` | An HTTP response arrived | Fail count reset, unless a ban is running or a failure landed inside `dedupWindow` |
 | `ambiguous` | `ETIMEDOUT`, `ECONNRESET`, `ECONNABORTED`, "socket hang up", "timeout" | Global record untouched; banned off the route it failed on ([Route bans](#route-bans)) |
+| `throttled` | The proxy answered the CONNECT with `429` | Nothing banned, record untouched; retried on another proxy |
 
 Unknown errors default to `server`, which keeps proxies in the pool.
 
@@ -213,6 +214,11 @@ connection dropped before any answer (status `0`), all with a body starting `Req
 returned a Syscall Error:` or empty. None of them came from the target, so none of them
 reach interceptors or the default statuses: a refused CONNECT is a `proxy` failure, the
 rest are `ambiguous`.
+
+A CONNECT refused with `429` is the exception: that is the provider throttling the account,
+not one exit failing, and it lands on every exit at once while they keep serving. Banning on
+it would empty the pool, so it is `throttled` and bans nothing. A `429` from the target
+itself is an ordinary response and still goes to interceptors and the default statuses.
 
 ### Banning
 

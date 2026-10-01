@@ -473,6 +473,38 @@ describe('route bans', () => {
     }
   }, 30000);
 
+  it('reads a 429 on the CONNECT as the provider throttling, and bans nothing for it', async () => {
+    const throttled = await startProxy('127.0.0.1', { refuseWith: 429 });
+    const client = new GhostFetch({
+      proxies: [throttled.url, proxyB.url],
+      healthCheck: false,
+      retry: { delays: [0] },
+      ban: { maxFailures: 1, duration: 60000 },
+    });
+
+    try {
+      // Pinned, so every attempt lands on the throttled exit
+      const error = await client.get(geo('/ok'), { proxy: throttled.url }).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(MaxRetriesExceededError);
+      const { lastError } = error as MaxRetriesExceededError;
+      expect(lastError.type).toBe('throttled');
+      expect(lastError.message).toContain('Proxy responded with non 200 code: 429');
+
+      // A provider-wide throttle used to ban every exit in turn and empty the pool
+      expect(client.stats.availableProxies).toBe(2);
+      expect(client.poolStatus(geo('/ok')).usable).toBe(2);
+
+      // Unpinned, the retry rotates to the other exit and goes through
+      for (let i = 0; i < 4; i++) {
+        const res = await client.get(geo('/ok'));
+        expect(res.status).toBe(200);
+      }
+    } finally {
+      await client.destroy();
+      await throttled.close();
+    }
+  }, 30000);
+
   it('bans an exit off the route it fails on and keeps it everywhere else', async () => {
     const flaky = await startProxy('127.0.0.1', { dropPath: '/rug/' });
     const client = new GhostFetch({
