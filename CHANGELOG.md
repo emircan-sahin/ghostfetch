@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.1
+
+### Fixed
+
+- **A provider's 429 no longer bans the whole pool.** A proxy refusing the CONNECT with `429`
+  was a `proxy` failure, so it counted toward a global ban. That 429 is the provider
+  throttling the account: measured on a 40-entry pool, every port got it within the same
+  minute while the same ports kept serving 200s, and two strikes each banned all 40 for the
+  full ban duration. It is now a new error type, `throttled`, that bans nothing and is
+  retried on another proxy. Other refused CONNECTs (`407`, `502`, `503`) are still `proxy`
+  failures, and a 429 from the target still reaches interceptors as a response.
+
 ## 0.7.0
 
 ### Changed
