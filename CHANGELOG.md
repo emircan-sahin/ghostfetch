@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+### Changed
+
+- **Connections are kept open between requests.** CycleTLS documents `enableConnectionReuse`
+  as on by default, but its Go side reads a missing field as `false`, and ghostfetch never sent
+  it: every request paid the proxy CONNECT and the TLS handshake again. Measured through one
+  exit, 1.25s a request before against 0.55s once the connection is open; on a 233 KB OKX
+  response through four exits the median went from 1606ms to 973ms. The pool is per proxy, so
+  each request still leaves through its own exit. `enableConnectionReuse: false` turns it off.
+- **The ClientHello offers TLS 1.3.** `tls13AutoRetry` had the same gap: off, a JA3 starting
+  `771,` (every browser's) went out TLS 1.2-only, so peet.ws read JA4 `t12…` from a client
+  calling itself Chrome. It is now on (`t13…`, TLS 1.3 negotiated). The JA3 peet.ws shows can
+  carry fewer curves than the one you set, as TLS 1.3 keeps only those that can be key shares;
+  JA4 does not include curves. `tls13AutoRetry: false` restores the old hello.
+
 ## 0.7.1
 
 ### Fixed
