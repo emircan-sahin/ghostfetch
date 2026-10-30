@@ -1,11 +1,19 @@
 # Changelog
 
+## 0.9.3
+
+### Changed
+
+- **CycleTLS `2.0.5-patch.3`.** Same code as `2.0.5-patch.2`; its package now names its
+  repository ([emircan-sahin/cycletls](https://github.com/emircan-sahin/cycletls)), issues and
+  readme. The examples in `docs/API.md` and the tests use placeholder hosts.
+
 ## 0.9.2
 
 ### Fixed
 
 - **CycleTLS `2.0.5-patch.2`**, from an audit of the paths ghostfetch uses (details in the fork's
-  `xaxios/README.md`):
+  `fork/README.md`):
   - Concurrent requests could crash the Go process: its transport map was read and written without
     a lock, which Go treats as fatal.
   - One proxy that accepted the connection and went silent blocked every new connection through it:
@@ -38,8 +46,8 @@
 - **Every request asks for compression.** Without a `browser` preset ghostfetch sent no
   `accept-encoding`, so servers answered uncompressed, and a client without the header is one
   no browser is. It now sends every coding this runtime can decode (`gzip, deflate, br`, plus
-  `zstd` where Node has it) and decodes the answer as before. An OKX holder list went from
-  234 KB to 38 KB on the wire, about 0.25s less through a proxy. A preset or caller value
+  `zstd` where Node has it) and decodes the answer as before. A 234 KB JSON answer went to
+  38 KB on the wire, about 0.25s less through a proxy. A preset or caller value
   still replaces it.
 
 ## 0.8.0
@@ -49,7 +57,7 @@
 - **Connections are kept open between requests.** CycleTLS documents `enableConnectionReuse`
   as on by default, but its Go side reads a missing field as `false`, and ghostfetch never sent
   it: every request paid the proxy CONNECT and the TLS handshake again. Measured through one
-  exit, 1.25s a request before against 0.55s once the connection is open; on a 233 KB OKX
+  exit, 1.25s a request before against 0.55s once the connection is open; on a 233 KB JSON
   response through four exits the median went from 1606ms to 973ms. The pool is per proxy, so
   each request still leaves through its own exit. `enableConnectionReuse: false` turns it off.
 - **The ClientHello offers TLS 1.3.** `tls13AutoRetry` had the same gap: off, a JA3 starting
