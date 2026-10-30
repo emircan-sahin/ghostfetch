@@ -267,8 +267,8 @@ target refuses an IP on one endpoint that every other endpoint still accepts:
 
 ```ts
 client.addInterceptor({
-  name: 'okx',
-  match: (url) => url.includes('okx.com'),
+  name: 'example-api',
+  match: (url) => url.includes('api.example.com'),
   check: (res) => (res.status === 403 ? 'scopedBan' : null),
 });
 ```
@@ -310,10 +310,10 @@ pool is not hit twice in a row. Grouping is inferred from the URL; no labels nee
 
 ```ts
 proxies: [
-  'http://user:pass@pr.oxylabs.io:8001',
-  'http://user:pass@gate.decodo.com:8001',
+  'http://user:pass@proxy-a.example.net:8001',
+  'http://user:pass@proxy-b.example.net:8001',
 ]
-// oxylabs fails -> retry lands on decodo
+// provider A fails -> retry lands on provider B
 ```
 
 Falls back to the same hostname when there is no alternative.

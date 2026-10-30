@@ -33,10 +33,10 @@ describe('ProxyManager — scoped bans', () => {
   it('scoped ban removes the proxy only for that scope', () => {
     const pm = new ProxyManager([A, B], { maxFailures: 1, duration: 60000 });
 
-    expect(pm.reportScopedFailure(A, 'okx.com')).toBe(true);
+    expect(pm.reportScopedFailure(A, 'api.example.com')).toBe(true);
 
-    // A is gone for okx.com...
-    expect(pm.getProxy({ scope: 'okx.com' })).toBe(B);
+    // A is gone for api.example.com...
+    expect(pm.getProxy({ scope: 'api.example.com' })).toBe(B);
     // ...but still fine globally and for other scopes
     expect(pm.available).toBe(2);
     expect(new Set([pm.getProxy({ scope: 'binance.com' })])).not.toEqual(new Set([null]));
@@ -46,23 +46,23 @@ describe('ProxyManager — scoped bans', () => {
     const pm = new ProxyManager([A], { scopedMaxFailures: 2, duration: 60000, dedupWindow: 20 });
 
     // One failure — not banned yet
-    expect(pm.reportScopedFailure(A, 'okx.com')).toBe(false);
+    expect(pm.reportScopedFailure(A, 'api.example.com')).toBe(false);
 
     // A successful request on the same scope must clear the counter, otherwise the
     // next single failure would ban the proxy as if it had failed twice in a row. It has
     // to land clear of the failure's dedup window to count as evidence at all.
     await new Promise((r) => setTimeout(r, 30));
-    pm.reportScopedSuccess(A, 'okx.com');
+    pm.reportScopedSuccess(A, 'api.example.com');
 
     await new Promise((r) => setTimeout(r, 30));
-    expect(pm.reportScopedFailure(A, 'okx.com')).toBe(false);
-    expect(pm.getProxy({ scope: 'okx.com' })).toBe(A);
+    expect(pm.reportScopedFailure(A, 'api.example.com')).toBe(false);
+    expect(pm.getProxy({ scope: 'api.example.com' })).toBe(A);
   });
 
   it('scoped bans are ignored when banning is disabled', () => {
     const pm = new ProxyManager([A], false);
-    expect(pm.reportScopedFailure(A, 'okx.com')).toBe(false);
-    expect(pm.getProxy({ scope: 'okx.com' })).toBe(A);
+    expect(pm.reportScopedFailure(A, 'api.example.com')).toBe(false);
+    expect(pm.getProxy({ scope: 'api.example.com' })).toBe(A);
   });
 });
 
@@ -122,8 +122,8 @@ describe('ProxyManager — isUsable', () => {
     expect(pm.isUsable(A, { country: 'DE' })).toBe(false);
     expect(pm.isUsable(B, { country: 'US' })).toBe(false);
 
-    pm.reportScopedFailure(A, 'okx.com');
-    expect(pm.isUsable(A, { scope: 'okx.com' })).toBe(false);
+    pm.reportScopedFailure(A, 'api.example.com');
+    expect(pm.isUsable(A, { scope: 'api.example.com' })).toBe(false);
     expect(pm.isUsable(A, { scope: 'binance.com' })).toBe(true);
   });
 });
@@ -147,14 +147,14 @@ describe('ProxyManager — country data', () => {
     const pm = new ProxyManager([A], { maxFailures: 1, duration: 60000 });
     pm.setCountry(A, 'US');
     pm.reportFailure(A);
-    pm.reportScopedFailure(A, 'okx.com');
+    pm.reportScopedFailure(A, 'api.example.com');
 
     pm.replaceProxies([A, B]);
 
     expect(pm.total).toBe(2);
     expect(pm.available).toBe(2);
     expect(pm.getCountry(A)).toBeUndefined();
-    expect(pm.isUsable(A, { scope: 'okx.com' })).toBe(true);
+    expect(pm.isUsable(A, { scope: 'api.example.com' })).toBe(true);
   });
 });
 

@@ -749,8 +749,8 @@ export class GhostFetch {
 
     // Case-insensitive: `Accept-Language` from the caller must replace an
     // `accept-language` default, not sit alongside it as a second header.
-    // Every browser asks for compression, and without it servers send the body as is: an OKX
-    // holder list came back 234 KB instead of 38 KB. A preset or caller value still wins.
+    // Every browser asks for compression, and without it servers send the body as is: a JSON
+    // answer came back 234 KB instead of 38 KB. A preset or caller value still wins.
     const headers = mergeHeaders({ 'accept-encoding': ACCEPT_ENCODING }, this.config.headers, options?.headers);
 
     const cycleTLSOptions: CycleTLSRequestOptions = {

@@ -1,46 +1,46 @@
 import { describe, it, expect } from 'vitest';
 import { ProxyManager } from '../src/proxy-manager';
 
-const OXYLABS_1 = 'http://user:pass@pr.oxylabs.io:8001';
-const OXYLABS_2 = 'http://user:pass@pr.oxylabs.io:8002';
-const OXYLABS_3 = 'http://user:pass@pr.oxylabs.io:8003';
-const DECODO_1 = 'http://user:pass@gate.decodo.com:8001';
-const DECODO_2 = 'http://user:pass@gate.decodo.com:8002';
+const PROVIDER_A_1 = 'http://user:pass@proxy-a.example.net:8001';
+const PROVIDER_A_2 = 'http://user:pass@proxy-a.example.net:8002';
+const PROVIDER_A_3 = 'http://user:pass@proxy-a.example.net:8003';
+const PROVIDER_B_1 = 'http://user:pass@proxy-b.example.net:8001';
+const PROVIDER_B_2 = 'http://user:pass@proxy-b.example.net:8002';
 
 describe('getProxy hostname diversification', () => {
   it('prefers different hostname than excluded proxy on retry', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, OXYLABS_3, DECODO_1, DECODO_2]);
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_A_3, PROVIDER_B_1, PROVIDER_B_2]);
 
-    // Retry 100 times with OXYLABS_1 failed — must always land on decodo
+    // Retry 100 times with PROVIDER_A_1 failed — must always land on provider B
     for (let i = 0; i < 100; i++) {
-      const picked = pm.getProxy({ exclude: OXYLABS_1 });
+      const picked = pm.getProxy({ exclude: PROVIDER_A_1 });
       expect(picked).not.toBeNull();
-      expect(new URL(picked!).hostname).toBe('gate.decodo.com');
+      expect(new URL(picked!).hostname).toBe('proxy-b.example.net');
     }
   });
 
   it('falls back to same hostname when no other host available', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, OXYLABS_3]);
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_A_3]);
 
-    const picked = pm.getProxy({ exclude: OXYLABS_1 });
+    const picked = pm.getProxy({ exclude: PROVIDER_A_1 });
     expect(picked).not.toBeNull();
-    expect(picked).not.toBe(OXYLABS_1);
-    expect([OXYLABS_2, OXYLABS_3]).toContain(picked);
+    expect(picked).not.toBe(PROVIDER_A_1);
+    expect([PROVIDER_A_2, PROVIDER_A_3]).toContain(picked);
   });
 
   it('returns the only remaining proxy when exclude leaves one same-host candidate', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2]);
-    expect(pm.getProxy({ exclude: OXYLABS_1 })).toBe(OXYLABS_2);
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2]);
+    expect(pm.getProxy({ exclude: PROVIDER_A_1 })).toBe(PROVIDER_A_2);
   });
 
   it('returns excluded proxy when it is the only one left', () => {
-    const pm = new ProxyManager([OXYLABS_1]);
+    const pm = new ProxyManager([PROVIDER_A_1]);
     // Falls back to available pool when excluding leaves empty
-    expect(pm.getProxy({ exclude: OXYLABS_1 })).toBe(OXYLABS_1);
+    expect(pm.getProxy({ exclude: PROVIDER_A_1 })).toBe(PROVIDER_A_1);
   });
 
   it('does not diversify when no exclude is given', () => {
-    const pm = new ProxyManager([OXYLABS_1, DECODO_1]);
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_B_1]);
     // Should pick randomly — run many times, both hosts should appear
     const hosts = new Set<string>();
     for (let i = 0; i < 50; i++) {
@@ -50,52 +50,52 @@ describe('getProxy hostname diversification', () => {
     expect(hosts.size).toBe(2);
   });
 
-  it('diversification chain: fail oxylabs then fail decodo returns oxylabs', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, DECODO_1, DECODO_2]);
+  it('diversification chain: fail provider A then fail provider B returns provider A', () => {
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_B_1, PROVIDER_B_2]);
 
-    // First pick excludes oxylabs → must be decodo
+    // First pick excludes provider A → must be provider B
     for (let i = 0; i < 50; i++) {
-      const first = pm.getProxy({ exclude: OXYLABS_1 });
-      expect(new URL(first!).hostname).toBe('gate.decodo.com');
+      const first = pm.getProxy({ exclude: PROVIDER_A_1 });
+      expect(new URL(first!).hostname).toBe('proxy-b.example.net');
     }
 
-    // Second pick excludes decodo → must be oxylabs
+    // Second pick excludes provider B → must be provider A
     for (let i = 0; i < 50; i++) {
-      const second = pm.getProxy({ exclude: DECODO_1 });
-      expect(new URL(second!).hostname).toBe('pr.oxylabs.io');
+      const second = pm.getProxy({ exclude: PROVIDER_B_1 });
+      expect(new URL(second!).hostname).toBe('proxy-a.example.net');
     }
   });
 
   it('respects country filter alongside diversification', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, DECODO_1, DECODO_2]);
-    pm.setCountry(OXYLABS_1, 'US');
-    pm.setCountry(OXYLABS_2, 'US');
-    pm.setCountry(DECODO_1, 'DE');
-    pm.setCountry(DECODO_2, 'US');
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_B_1, PROVIDER_B_2]);
+    pm.setCountry(PROVIDER_A_1, 'US');
+    pm.setCountry(PROVIDER_A_2, 'US');
+    pm.setCountry(PROVIDER_B_1, 'DE');
+    pm.setCountry(PROVIDER_B_2, 'US');
 
-    // Exclude OXYLABS_1 with country=US → only OXYLABS_2 and DECODO_2 eligible
-    // Diversity prefers different host → DECODO_2
+    // Exclude PROVIDER_A_1 with country=US → only PROVIDER_A_2 and PROVIDER_B_2 eligible
+    // Diversity prefers different host → PROVIDER_B_2
     for (let i = 0; i < 50; i++) {
-      const picked = pm.getProxy({ exclude: OXYLABS_1, country: 'US' });
-      expect(picked).toBe(DECODO_2);
+      const picked = pm.getProxy({ exclude: PROVIDER_A_1, country: 'US' });
+      expect(picked).toBe(PROVIDER_B_2);
     }
   });
 
   it('respects scope filter alongside diversification', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, DECODO_1, DECODO_2], { maxFailures: 1 });
-    // Scope-ban DECODO_1 and DECODO_2 for site.com
-    pm.reportScopedFailure(DECODO_1, 'site.com');
-    pm.reportScopedFailure(DECODO_2, 'site.com');
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_B_1, PROVIDER_B_2], { maxFailures: 1 });
+    // Scope-ban PROVIDER_B_1 and PROVIDER_B_2 for site.com
+    pm.reportScopedFailure(PROVIDER_B_1, 'site.com');
+    pm.reportScopedFailure(PROVIDER_B_2, 'site.com');
 
-    // Only oxylabs eligible → must fall back to same host
+    // Only provider A eligible → must fall back to same host
     for (let i = 0; i < 20; i++) {
-      const picked = pm.getProxy({ exclude: OXYLABS_1, scope: 'site.com' });
-      expect(picked).toBe(OXYLABS_2);
+      const picked = pm.getProxy({ exclude: PROVIDER_A_1, scope: 'site.com' });
+      expect(picked).toBe(PROVIDER_A_2);
     }
   });
 
-  it('3-retry chain alternates hosts: oxylabs -> decodo -> oxylabs', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, DECODO_1, DECODO_2]);
+  it('3-retry chain alternates hosts: provider A -> provider B -> provider A', () => {
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_B_1, PROVIDER_B_2]);
 
     // Simulate 3-retry chain 100 times — always alternates
     for (let i = 0; i < 100; i++) {
@@ -118,25 +118,25 @@ describe('getProxy hostname diversification', () => {
   });
 
   it('retry chain stays same-host when only one provider exists', () => {
-    const pm = new ProxyManager([OXYLABS_1, OXYLABS_2, OXYLABS_3]);
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_A_2, PROVIDER_A_3]);
 
     const a1 = pm.getProxy();
     const a2 = pm.getProxy({ exclude: a1! });
     const a3 = pm.getProxy({ exclude: a2! });
 
     // All on same host — diversification falls back
-    expect(new URL(a1!).hostname).toBe('pr.oxylabs.io');
-    expect(new URL(a2!).hostname).toBe('pr.oxylabs.io');
-    expect(new URL(a3!).hostname).toBe('pr.oxylabs.io');
+    expect(new URL(a1!).hostname).toBe('proxy-a.example.net');
+    expect(new URL(a2!).hostname).toBe('proxy-a.example.net');
+    expect(new URL(a3!).hostname).toBe('proxy-a.example.net');
     // But consecutive proxies differ (exclude still works)
     expect(a2).not.toBe(a1);
     expect(a3).not.toBe(a2);
   });
 
   it('handles malformed proxy URL in exclude gracefully (no diversification)', () => {
-    const pm = new ProxyManager([OXYLABS_1, DECODO_1]);
+    const pm = new ProxyManager([PROVIDER_A_1, PROVIDER_B_1]);
     // Unparseable exclude — getHostname returns null, diversification is skipped
     const picked = pm.getProxy({ exclude: 'not-a-url' });
-    expect([OXYLABS_1, DECODO_1]).toContain(picked);
+    expect([PROVIDER_A_1, PROVIDER_B_1]).toContain(picked);
   });
 });

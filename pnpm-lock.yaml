@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@emircansahin/cycletls':
-        specifier: 2.0.5-patch.2
-        version: 2.0.5-patch.2
+        specifier: 2.0.5-patch.3
+        version: 2.0.5-patch.3
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -51,8 +51,8 @@ packages:
   '@bcoe/v8-coverage@0.2.3':
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
 
-  '@emircansahin/cycletls@2.0.5-patch.2':
-    resolution: {integrity: sha512-YW8e9U6lrZUMd6+7DVbQjd8IKz2yWLllJ5sNZ6eMZ3JWCIjVwUHOyPkjy6C19jUiAiwIF0KkDCIwnxRi3JDjLA==}
+  '@emircansahin/cycletls@2.0.5-patch.3':
+    resolution: {integrity: sha512-eLuWKg1D41JBZJ2SUC76o0rTN4ylGmkLGH3fdyjiwTQJsKGRAqF8Qk2CGi0v/q7BnMD/f8Rq2Z1zgULdieDTrQ==}
     engines: {node: '>=18.0.0'}
 
   '@esbuild/aix-ppc64@0.21.5':
@@ -868,7 +868,7 @@ snapshots:
 
   '@bcoe/v8-coverage@0.2.3': {}
 
-  '@emircansahin/cycletls@2.0.5-patch.2':
+  '@emircansahin/cycletls@2.0.5-patch.3':
     dependencies:
       '@types/node': 20.19.43
       form-data: 4.0.6

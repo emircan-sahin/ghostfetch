@@ -13,8 +13,8 @@ describe('routeScope', () => {
 
   it('keeps the route words around the id', () => {
     expect(routeScope(`https://api.site.com/v2/token/${MINT}/holders`)).toBe('api.site.com/v2/token/*/holders');
-    expect(routeScope('https://web3.okx.com/priapi/v1/dx/market/v2/holders/ranking-list?chainId=501')).toBe(
-      'web3.okx.com/priapi/v1/dx/market/v2/holders/ranking-list',
+    expect(routeScope('https://api.example.com/v1/market/v2/holders/ranking-list?chainId=501')).toBe(
+      'api.example.com/v1/market/v2/holders/ranking-list',
     );
   });
 

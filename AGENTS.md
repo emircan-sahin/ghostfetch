@@ -181,15 +181,15 @@ the tests call.
 
 ### CycleTLS is our fork, `@emircansahin/cycletls`
 
-Upstream 2.0.5 with our fixes (the list and the reasons: `xaxios/README.md` in the fork). The first:
+Upstream 2.0.5 with our fixes (the list and the reasons: `fork/README.md` in the fork). The first:
 with `enableConnectionReuse` on, `dialTLS` kept the connection it
 negotiated in `cachedConnections` and handed it back on every later dial, closed or not, so one
 dropped connection failed that host on that proxy for good (`use of closed network connection`).
 No CycleTLS option avoids it with reuse on. Do not switch back to `cycletls` unless upstream
 ships the fix (`dialTLS` deletes the cached connection when it hands it out) and
-`tests/connection-reuse.test.ts` passes on it. The fork, its build script (`xaxios/build.sh`: the
+`tests/connection-reuse.test.ts` passes on it. The fork, its build script (`fork/build.sh`: the
 seven binaries, upstream's JS unchanged, the Go source for GPL-3.0) and its notes live on the
-`xaxios/2.0.5-connreuse` branch of `~/Documents/GitHub/cycletls`.
+`fixes/2.0.5` branch of [emircan-sahin/cycletls](https://github.com/emircan-sahin/cycletls).
 
 `tests/connection-reuse.test.ts` runs CycleTLS on a private port: on the shared 9119 it rides
 any Go process another program on the machine left there, with that program's binary.
