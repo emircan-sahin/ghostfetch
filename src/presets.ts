@@ -20,7 +20,7 @@ export type BrowserPreset = 'chrome' | 'firefox';
  * Only advertise codings this Node build can actually decode. Claiming zstd on a
  * runtime without it would earn us a body we cannot read.
  */
-const ACCEPT_ENCODING = SUPPORTED_ENCODINGS.join(', ');
+export const ACCEPT_ENCODING = SUPPORTED_ENCODINGS.join(', ');
 
 export interface BrowserProfile {
   ja3: string;

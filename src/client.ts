@@ -11,7 +11,7 @@ import {
   resolveJitter,
 } from './retry';
 import { GhostFetchRequestError, CloudflareJSChallengeError, NoProxyAvailableError, MaxRetriesExceededError, InterceptorError } from './errors';
-import { getBrowserProfile } from './presets';
+import { ACCEPT_ENCODING, getBrowserProfile } from './presets';
 import { decompress } from './decompress';
 import { Session } from './session';
 import { routeScope } from './scope';
@@ -748,8 +748,10 @@ export class GhostFetch {
     const timeout = options?.timeout ?? this.config.timeout ?? DEFAULT_TIMEOUT;
 
     // Case-insensitive: `Accept-Language` from the caller must replace an
-    // `accept-language` default, not sit alongside it as a second header
-    const headers = mergeHeaders(this.config.headers, options?.headers);
+    // `accept-language` default, not sit alongside it as a second header.
+    // Every browser asks for compression, and without it servers send the body as is: an OKX
+    // holder list came back 234 KB instead of 38 KB. A preset or caller value still wins.
+    const headers = mergeHeaders({ 'accept-encoding': ACCEPT_ENCODING }, this.config.headers, options?.headers);
 
     const cycleTLSOptions: CycleTLSRequestOptions = {
       headers,

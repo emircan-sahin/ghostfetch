@@ -2,6 +2,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { GhostFetch, MaxRetriesExceededError, GhostFetchRequestError, InterceptorError } from '../src';
+import { SUPPORTED_ENCODINGS } from '../src/decompress';
 
 // --- Test server ---
 
@@ -109,6 +110,12 @@ const server = http.createServer((req, res) => {
   if (url === '/redirect') {
     res.writeHead(302, { location: `http://localhost:${port}/ok` });
     res.end();
+    return;
+  }
+
+  if (url === '/echo-accept-encoding') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ acceptEncoding: req.headers['accept-encoding'] ?? null }));
     return;
   }
 
@@ -872,6 +879,16 @@ describe('compressed responses', () => {
   it('decodes a brotli body', async () => {
     const res = await client.get(u('/brotli'), { headers: { 'accept-encoding': 'br' } });
     expect(res.json()).toEqual({ compressed: 'br' });
+  });
+
+  it('asks for every coding it can decode by default, no preset needed', async () => {
+    const res = await client.get(u('/echo-accept-encoding'));
+    expect(res.json<{ acceptEncoding: string }>().acceptEncoding).toBe(SUPPORTED_ENCODINGS.join(', '));
+  });
+
+  it("lets a caller's accept-encoding replace the default", async () => {
+    const res = await client.get(u('/echo-accept-encoding'), { headers: { 'Accept-Encoding': 'gzip' } });
+    expect(res.json<{ acceptEncoding: string }>().acceptEncoding).toBe('gzip');
   });
 
   it('falls back to the raw bytes when content-encoding lies', async () => {
