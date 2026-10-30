@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.1
+
+### Fixed
+
+- **A closed connection no longer breaks its host for good.** CycleTLS 2.0.5 caches the first TLS
+  connection to each host and handed it back on every later dial, after it had closed too: once a
+  server or proxy dropped a kept connection, or the network went away, every request to that host
+  on that proxy failed at once with `use of closed network connection`, until a request to some
+  other host on the same proxy happened to clear it. With reuse on since 0.8.0, 35 of one backend's
+  proxy routes to a single host broke after a laptop slept, for minutes. No CycleTLS option avoids it
+  with reuse on, and upstream has not released since 2.0.5, so ghostfetch now depends on
+  [`@emircansahin/cycletls`](https://www.npmjs.com/package/@emircansahin/cycletls): 2.0.5 with that
+  dial fixed (the cached connection is handed out once). Same API and binaries for the same
+  platforms; reuse works as before (`tests/connection-reuse.test.ts`).
+
 ## 0.9.0
 
 ### Changed
