@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0
+
+### Changed
+
+- **Every request asks for compression.** Without a `browser` preset ghostfetch sent no
+  `accept-encoding`, so servers answered uncompressed, and a client without the header is one
+  no browser is. It now sends every coding this runtime can decode (`gzip, deflate, br`, plus
+  `zstd` where Node has it) and decodes the answer as before. An OKX holder list went from
+  234 KB to 38 KB on the wire, about 0.25s less through a proxy. A preset or caller value
+  still replaces it.
+
 ## 0.8.0
 
 ### Changed
