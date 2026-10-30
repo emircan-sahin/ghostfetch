@@ -111,6 +111,19 @@ export interface GhostFetchConfig {
   /** Disable GREASE (applied to all requests) */
   disableGrease?: boolean;
 
+  /**
+   * Offer TLS 1.3 in the ClientHello (default: true). Off, a JA3 starting `771,` goes out
+   * TLS 1.2-only (JA4 `t12…`), which no current browser sends.
+   */
+  tls13AutoRetry?: boolean;
+
+  /**
+   * Keep connections open between requests, one pool per proxy (default: true). Off, every
+   * request pays the proxy CONNECT and TLS handshake again: 1.25s a request through one exit,
+   * against 0.55s once its connection is open.
+   */
+  enableConnectionReuse?: boolean;
+
   /** Default header order for all requests */
   headerOrder?: string[];
 

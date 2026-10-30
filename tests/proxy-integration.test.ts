@@ -328,6 +328,8 @@ describe('session stickiness', () => {
   it('keeps every request on the same proxy', async () => {
     const client = new GhostFetch({
       proxies: [proxyA.url, proxyB.url],
+      // The fixture counts CONNECTs, and a kept-alive tunnel would carry all four requests on one.
+      enableConnectionReuse: false,
       healthCheck: { url: geo('/geo-us'), timeout: 3000 },
       retry: { delays: [] },
     });

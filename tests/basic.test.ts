@@ -33,11 +33,15 @@ describe.runIf(liveNetwork)('GhostFetch — live request', () => {
     const res = await client.get('https://tls.peet.ws/api/all');
     expect(res.status).toBe(200);
 
-    const data = res.json<{ tls: { ja3: string }; user_agent: string }>();
+    const data = res.json<{ tls: { ja3: string; ja4: string }; user_agent: string }>();
 
-    // The ClientHello peet.ws observed must be the exact one the preset defines
-    expect(data.tls.ja3).toBe(getBrowserProfile('chrome').ja3);
+    // The ClientHello peet.ws observed must carry the preset's version, ciphers and extensions.
+    // Its curves can be fewer: offering TLS 1.3 keeps only the curves that can be key shares.
+    const fields = (ja3: string) => ja3.split(',').slice(0, 3);
+    expect(fields(data.tls.ja3)).toEqual(fields(getBrowserProfile('chrome').ja3));
     expect(data.user_agent).toBe(getBrowserProfile('chrome').userAgent);
+    // and offer TLS 1.3 as Chrome does: a TLS 1.2-only hello reads `t12…`
+    expect(data.tls.ja4.startsWith('t13')).toBe(true);
   }, 30000);
 
   it('decodes a compressed body — browsers always send accept-encoding', async () => {

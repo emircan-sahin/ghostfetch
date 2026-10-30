@@ -771,6 +771,11 @@ export class GhostFetch {
       if (this.config[key] != null) target[key] = this.config[key];
     }
 
+    // CycleTLS means both to default on, but its Go side reads a missing field as false and its
+    // typings lack them, so they go out on every request.
+    target.tls13AutoRetry = this.config.tls13AutoRetry ?? true;
+    target.enableConnectionReuse = this.config.enableConnectionReuse ?? true;
+
     for (const key of PASSTHROUGH_OPTIONS) {
       const value = options?.[key] ?? this.config[key];
       if (value != null) target[key] = value;

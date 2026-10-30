@@ -8,6 +8,9 @@ import { GhostFetch, MaxRetriesExceededError, GhostFetchRequestError, Intercepto
 let port: number;
 let requestCount: number;
 const endpointHits = new Map<string, number>();
+// Which TCP connection carried a request: two requests on one id rode one kept-alive connection.
+const socketIds = new WeakMap<object, number>();
+let nextSocketId = 0;
 
 // 1x1 transparent PNG — byte 0x89 and the trailing chunk are not valid UTF-8,
 // so a client that round-trips through a string will corrupt this.
@@ -20,6 +23,13 @@ const server = http.createServer((req, res) => {
   requestCount++;
   const url = req.url ?? '/';
   endpointHits.set(url, (endpointHits.get(url) ?? 0) + 1);
+
+  if (url === '/socket') {
+    if (!socketIds.has(req.socket)) socketIds.set(req.socket, ++nextSocketId);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ socket: socketIds.get(req.socket) }));
+    return;
+  }
 
   if (url === '/ok') {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -460,6 +470,23 @@ describe('CycleTLS v2 options', () => {
     expect(data.cookie).toContain('token=new');
     expect(data.cookie).not.toContain('session=old');
     await cookieClient.destroy();
+  });
+});
+
+describe('connection reuse', () => {
+  const socketOf = async (target: GhostFetch) => JSON.parse((await target.get(u('/socket'))).body).socket;
+
+  it('sends back-to-back requests over one connection by default', async () => {
+    expect(await socketOf(client)).toBe(await socketOf(client));
+  });
+
+  it('opens a connection per request when turned off', async () => {
+    const freshClient = new GhostFetch({ retry: { delays: [] }, enableConnectionReuse: false });
+    try {
+      expect(await socketOf(freshClient)).not.toBe(await socketOf(freshClient));
+    } finally {
+      await freshClient.destroy();
+    }
   });
 });
 

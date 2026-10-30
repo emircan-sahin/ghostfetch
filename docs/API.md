@@ -55,6 +55,8 @@ const client = new GhostFetch(config?);
 | `headers` | `Record<string, string>` | — | Defaults for every request |
 | `cookies` | `Cookie[] \| Record<string, string>` | — | Defaults for every request |
 | `ja3` `ja4r` `http2Fingerprint` `quicFingerprint` `userAgent` `disableGrease` | | auto | [Fingerprinting](#fingerprinting) — config only |
+| `tls13AutoRetry` | `boolean` | `true` | Offer TLS 1.3 in the ClientHello. Off, a `771,` JA3 goes out TLS 1.2-only (JA4 `t12…`) — config only |
+| `enableConnectionReuse` | `boolean` | `true` | Keep connections open between requests, one pool per proxy. Off, every request pays the CONNECT and TLS handshake again |
 | `headerOrder` `orderAsProvided` `disableRedirect` `insecureSkipVerify` `forceHTTP1` `forceHTTP3` `serverName` | | see below | Also settable per request |
 
 Protocol defaults: `orderAsProvided` `false`, `disableRedirect` `false`,
@@ -128,6 +130,11 @@ Take your own values from [`tls.peet.ws/api/all`](https://tls.peet.ws/api/all):
 
 **All values must come from the same browser.** Mixing a Chrome JA3 with a Firefox
 User-Agent is a common and easily detected mistake.
+
+With `tls13AutoRetry` on (the default) peet.ws shows the JA3 with fewer curves than you set:
+TLS 1.3 keeps only the ones that can be key shares. JA4 does not include curves, so it is
+unchanged apart from `t13`. CycleTLS 2.0.5 does not apply `http2Fingerprint`: the server sees
+its default HTTP/2 settings whatever you set.
 
 ### Header merging
 
