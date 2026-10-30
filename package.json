@@ -64,7 +64,7 @@
   "author": "Emircan Sahin",
   "license": "MIT",
   "dependencies": {
-    "cycletls": "^2.0.5"
+    "@emircansahin/cycletls": "2.0.5-patch.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

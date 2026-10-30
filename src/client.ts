@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import initCycleTLS, { CycleTLSClient, CycleTLSRequestOptions } from 'cycletls';
+import initCycleTLS, { CycleTLSClient, CycleTLSRequestOptions } from '@emircansahin/cycletls';
 import { ProxyManager } from './proxy-manager';
 import { classifyError, isCloudflareChallenge, checkInterceptors, checkDefaultRetryStatus, runCheck } from './classifier';
 import {
