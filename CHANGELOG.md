@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.2
+
+### Fixed
+
+- **CycleTLS `2.0.5-patch.2`**, from an audit of the paths ghostfetch uses (details in the fork's
+  `xaxios/README.md`):
+  - Concurrent requests could crash the Go process: its transport map was read and written without
+    a lock, which Go treats as fatal.
+  - One proxy that accepted the connection and went silent blocked every new connection through it:
+    the CONNECT and the TLS handshake had no deadline. They now use the request timeout.
+  - Two requests to the same URL in the same millisecond could receive each other's response
+    (request ids collided 1 time in 1000).
+  - Each client that dropped its socket to the Go process without `exit` left that socket open for
+    good; one malformed message ended a client's request loop.
+  - Idle HTTP/2 connections are pinged, so a half-dead tunnel is dropped instead of timing requests out.
+
 ## 0.9.1
 
 ### Fixed
