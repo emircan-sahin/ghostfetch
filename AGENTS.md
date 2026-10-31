@@ -188,8 +188,13 @@ dropped connection failed that host on that proxy for good (`use of closed netwo
 No CycleTLS option avoids it with reuse on. Do not switch back to `cycletls` unless upstream
 ships the fix (`dialTLS` deletes the cached connection when it hands it out) and
 `tests/connection-reuse.test.ts` passes on it. The fork, its build script (`fork/build.sh`: the
-seven binaries, upstream's JS unchanged, the Go source for GPL-3.0) and its notes live on the
-`fixes/2.0.5` branch of [emircan-sahin/cycletls](https://github.com/emircan-sahin/cycletls).
+seven binaries, the JS compiled from the fork's `src/index.ts`, the Go source for GPL-3.0) and its
+notes live on the `fixes/2.0.5` branch of [emircan-sahin/cycletls](https://github.com/emircan-sahin/cycletls).
+
+Since `2.0.5-patch.4` the fork fails every pending request with `WebSocket server not connected`
+when its Go process exits or the local socket closes, which is what `withTransport` rebuilds on.
+Before it, a dead Go process left every request waiting out its timeout until the host restarted.
+`tests/transport-lost.test.ts` kills the process with a burst in flight; keep it passing.
 
 `tests/connection-reuse.test.ts` runs CycleTLS on a private port: on the shared 9119 it rides
 any Go process another program on the machine left there, with that program's binary.
