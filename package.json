@@ -1,6 +1,6 @@
 {
   "name": "@emircansahin/ghostfetch",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Resilient HTTP client for Node.js with TLS fingerprinting (CycleTLS/JA3), proxy rotation and health checks, sticky sessions with a cookie jar, and per-site retry rules that tell a bad proxy apart from a slow server",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
@@ -64,7 +64,7 @@
   "author": "Emircan Sahin",
   "license": "MIT",
   "dependencies": {
-    "@emircansahin/cycletls": "2.0.5-patch.3"
+    "@emircansahin/cycletls": "2.0.5-patch.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

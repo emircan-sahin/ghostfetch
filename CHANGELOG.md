@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.4
+
+### Fixed
+
+- **A dead CycleTLS Go process no longer hangs every request.** When the Go process died (a crash,
+  an OOM kill) nothing noticed: every request in flight and every later one waited out its timeout
+  until the host restarted. With CycleTLS `2.0.5-patch.4` they fail at once with the error
+  ghostfetch rebuilds its transport on, so a burst in flight comes back on a fresh process in about
+  a second (`tests/transport-lost.test.ts`).
+- **A late failure from the old transport no longer closes the rebuilt one.** Rebuilding closed
+  whatever transport was current; a request still holding the dead one could close the
+  replacement the first failure had just built. Only the client that failed is closed now.
+- **CycleTLS `2.0.5-patch.4`** (details in the fork's `fork/README.md`):
+  - One bad request (a proxy URL with an unsupported scheme, a malformed URL, a ja3 with too few
+    fields) ended the Go process and every request in it. It is now answered as a connection closed
+    before a response (status 0), so ghostfetch retries it elsewhere without blaming the proxy.
+  - The Go server listened on every interface, an open relay through our proxies to anyone who could
+    reach the port. It binds `127.0.0.1` and refuses browser origins.
+  - The TCP connect to a proxy and each TLS write have a 15 s deadline: a dropped SYN or a write into
+    a dead path blocked every request on that proxy for minutes.
+  - brotli v1.2.7 (a crafted stream panicked v1.2.0), binaries built with go1.26.10.
+
+### Added
+
+- **`response.encodedSize`**: the body's size as it arrived, before decompression, which is what a
+  request cost on the wire and through a proxy. `buffer().length` is the decoded size.
+
 ## 0.9.3
 
 ### Changed
