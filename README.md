@@ -114,6 +114,7 @@ res.url           // final URL after redirects
 res.json<T>()     // JSON.parse(body)
 res.buffer()      // Buffer — for binary responses
 res.arrayBuffer() // ArrayBuffer
+res.encodedSize   // number — bytes as they arrived, before decompression
 ```
 
 Methods: `get`, `post`, `put`, `patch`, `delete`, `head`, `options` — all take the same

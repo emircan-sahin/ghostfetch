@@ -77,6 +77,7 @@ interface GhostFetchResponse {
   json<T = unknown>(): T;
   buffer(): Buffer;
   arrayBuffer(): ArrayBuffer;
+  encodedSize: number;               // bytes as they arrived, before decompression
 }
 ```
 

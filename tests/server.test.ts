@@ -876,6 +876,15 @@ describe('compressed responses', () => {
     expect(res.json()).toEqual({ compressed: true });
   });
 
+  it('reports the size a body arrived at, before decompression', async () => {
+    const compressed = await client.get(u('/gzip'), { headers: { 'accept-encoding': 'gzip' } });
+    expect(compressed.encodedSize).toBe(zlib.gzipSync(Buffer.from('{"compressed":true}')).length);
+    expect(compressed.buffer().length).toBe('{"compressed":true}'.length);
+
+    const plain = await client.get(u('/ok'));
+    expect(plain.encodedSize).toBe(plain.buffer().length);
+  });
+
   it('decodes a brotli body', async () => {
     const res = await client.get(u('/brotli'), { headers: { 'accept-encoding': 'br' } });
     expect(res.json()).toEqual({ compressed: 'br' });

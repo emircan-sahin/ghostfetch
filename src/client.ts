@@ -226,7 +226,9 @@ export class GhostFetch {
       // pointing at nothing, and every later init on that port would inherit it.
       // Rebuild on a port of our own.
       this.usePrivatePort = true;
-      await this.closeTransport();
+      // Only the client that failed: when the Go process dies, every request in flight lands
+      // here at once, and closing whatever is current closed the one the first of them rebuilt.
+      await this.closeTransport(client);
       return fn(await this.ensureClient());
     }
   }
@@ -825,11 +827,8 @@ export class GhostFetch {
     // CycleTLS' Go transport only auto-decompresses while it owns Accept-Encoding.
     // Once a caller sets that header (any browser preset does), the bytes arrive
     // still compressed and it falls to us to decode them.
-    const raw = await decompress(
-      toBuffer(response.data),
-      responseHeaders['content-encoding'],
-      this.config.maxDecompressedSize,
-    );
+    const encoded = toBuffer(response.data);
+    const raw = await decompress(encoded, responseHeaders['content-encoding'], this.config.maxDecompressedSize);
 
     // Decode lazily: fetching a 10MB image should not also build a 10MB string
     let decoded: string | undefined;
@@ -844,6 +843,7 @@ export class GhostFetch {
       json: <T = unknown>() => JSON.parse(text()) as T,
       buffer: () => raw,
       arrayBuffer: () => raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer,
+      encodedSize: encoded.length,
     };
   }
 
@@ -997,8 +997,9 @@ export class GhostFetch {
    * Close the CycleTLS transport without tearing the client down.
    * A later request transparently re-opens it via ensureClient().
    */
-  private async closeTransport(): Promise<void> {
-    if (!this.cycleTLS) return;
+  /** Closes the current transport, or only `expected` if given and still current. */
+  private async closeTransport(expected?: CycleTLSClient): Promise<void> {
+    if (!this.cycleTLS || (expected && this.cycleTLS !== expected)) return;
 
     const client = this.cycleTLS;
     this.cycleTLS = null;

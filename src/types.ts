@@ -343,6 +343,12 @@ export interface GhostFetchResponse {
   /** Raw response bytes — use this for images, PDFs, archives, any binary payload. */
   buffer: () => Buffer;
 
+  /**
+   * The body's size as it arrived, before decompression: what the request cost on the wire and
+   * through a proxy. Equals `buffer().length` when the body was not compressed.
+   */
+  encodedSize: number;
+
   /** Raw response bytes as an ArrayBuffer. */
   arrayBuffer: () => ArrayBuffer;
 }
